@@ -1,1 +1,1 @@
-# FastImagingPipe
+# Fast Imaging Pipeline
