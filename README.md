@@ -16,7 +16,7 @@ Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H1
 **Step 4:**
 Run the code by ```./sharedlibrary_gpu Visreal_input.fits Visimag_input.fits B_input.fits V_input.fits Image_Size Number_of_Baselines Frequency UV_Scale Phase_RA Phase_Dec Output_Name.fits```, where ```Visreal_input.fits```, ```Visimag_input.fits''', ```B_input.fits''', and ```V_input.fits``` are input files (in FITS) for real components of visibilities, imagery components of visibilities, SVDed baseline matrix, and the V matrix in the SVD. The rest arguments are as their names suggested, where Image_Size is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), Number_of_Baselines is an integer, Frequency is in unit of Hz, UV_Scale is in unit of radian, Phase_RA and Phase_Dec are the phase centre in unit of degree, and the last argument is a file name of the output ended with '.fits'.
 
-**Step 4:**
+**Step 5:**
 The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output snapshot.
 
 ## Test
