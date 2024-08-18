@@ -10,16 +10,17 @@ Make sure GCCcore, CUDA, and CFITSIO are avaiable. If you see a warning saying `
 **Step 2:**
 If you do not need reprojection in the imaging, download the files in 'NoReproj'; otherwise, download the files in 'WithReproj' (will release soon).
 
+**Step 3:**
 Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H100. If you are using other GPU, you would need to make sure the CUDA arch is matching.
 
-**Step 3:**
-Run the code by ```./sharedlibrary_gpu Visreal0.fits Visimag0.fits Bin0.fits Vin0.fits 4096 2080 50000000 0.1310 0.0 0.0 dirty0.fits```, where ```dif1.fits``` and ```dif2.fits``` are the two difference images (FITS files), and ```snap1.fits``` is the reference snapshot image (FITS file). The three input images should have the same size.
+**Step 4:**
+Run the code by ```./sharedlibrary_gpu Visreal_input.fits Visimag_input.fits B_input.fits V_input.fits Image_Size Number_of_Baselines Frequency UV_Scale Phase_RA Phase_Dec Output_Name.fits```, where ```Visreal_input.fits```, ```Visimag_input.fits''', ```B_input.fits''', and ```V_input.fits``` are input files (in FITS) for real components of visibilities, imagery components of visibilities, SVDed baseline matrix, and the V matrix in the SVD. The rest arguments are as their names suggested, where Image_Size is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), Number_of_Baselines is an integer, Frequency is in unit of Hz, UV_Scale is in unit of radian, Phase_RA and Phase_Dec are the phase centre in unit of degree, and the last argument is a file name of the output ended with '.fits'.
 
 **Step 4:**
-The code will output a FITS file named ```output_tLISI.fits```, which is the output tLISI matrix.
+The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output snapshot.
 
 ## Test
-If you want to test the code, please download everything from the 
+If you want to test the code, please download the files from 'ExampleInput' of the corresponding reprojection method. Run the code by ```./sharedlibrary_gpu Visreal0.fits Visimag0.fits Bin0.fits Vin0.fits 4096 2080 50000000 0.1310 0.0 0.0 dirty0.fits'''. You should obtain a dirty0.fits. If you open it (by SAOImageDS9, Fv or MATLAB etc), you will see a simulated sky brightness distribution of regular distributed sources. 
 
 ## Contact
 If you have any questions or need further assistance, please feel free to contact at [egbdfmusic1@gmail.com](mailto:egbdfmusic1@gmail.com).
