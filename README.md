@@ -1,6 +1,6 @@
 # Fast Imaging Pipeline
 
-We have developed a GPU-accelerated fast imaging pipeline for imaging and transient detection in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information.
+We have developed a GPU-accelerated SVD imager for fast imaging in radio astronomy. It is part of the fast imaging pipeline of transient detection. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information.
 
 ## User guidance
 
@@ -8,19 +8,23 @@ We have developed a GPU-accelerated fast imaging pipeline for imaging and transi
 Make sure GCCcore, CUDA, and CFITSIO are avaiable. If you see a warning saying ```/usr/bin/ld.gold: warning: /apps/system/easybuild/software/GCCcore/11.2.0/lib/gcc/x86_64-pc-linux-gnu/11.2.0/crtbegin.o: unknown program property type 0xc0010002 in .note.gnu.property section```, you would need to make sure Python is also available.
 
 **Step 2:**
-If you do not need reprojection in the imaging, download the files in 'NoReproj'; otherwise, download the files in 'WithReproj' (will be released soon).
+If you do not need reprojection in the imaging, please download the files in 'NoReproj'; otherwise, please download the files in 'WithReproj' (will be released soon).
 
 **Step 3:**
-Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H100. If you are using other GPU, you would need to make sure the CUDA arch is matching.
+Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H100. If you are using other GPUs, you would need to make sure the CUDA arch is matching.
 
 **Step 4:**
-Run the code by ```./sharedlibrary_gpu Visreal_input.fits Visimag_input.fits B_input.fits V_input.fits Image_Size Number_of_Baselines Frequency Cell_Size Output_Name.fits```, where ```Visreal_input.fits```, ```Visimag_input.fits''', ```B_input.fits''', and ```V_input.fits``` are input files (in FITS) for real components of visibilities, imagery components of visibilities, SVDed baseline matrix, and the V matrix in the SVD. The rest arguments are as their names suggested, where Image_Size is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), Number_of_Baselines is an integer, Frequency is in unit of Hz, Cell_Size is in unit of radian, and the last argument is a file name of the output ended with '.fits'.
+Run the code by executing the following command:
+
+```./sharedlibrary_gpu Visreal_input.fits Visimag_input.fits B_input.fits V_input.fits Image_Size Number_of_Baselines Frequency Cell_Size Output_Name.fits```.
+
+Here, ```Visreal_input.fits```, ```Visimag_input.fits''', ```B_input.fits''', and ```V_input.fits``` are the input files (in FITS format) corresponding to the real components of visibilities, the imagery components of visibilities, the (centred) SVDed baseline matrix, and the V matrix in the SVD, respectively. The remaining arguments are as their names suggest, where ```Image_Size''' is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), ```Number_of_Baselines''' is an integer, ```Frequency''' is in units of Hz, ```Cell_Size''' is in units of radians, and the last argument is the name of the output file which should end with '.fits'.
 
 **Step 5:**
 The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output snapshot.
 
 ## Test
-If you want to test the code, please download the files from 'ExampleInput' of the corresponding reprojection method. Run the code by ```./sharedlibrary_gpu Visreal0.fits Visimag0.fits Bin0.fits Vin0.fits 4096 2080 50000000 0.0000213 dirty0.fits'''. You should obtain a dirty0.fits. If you open it (by SAOImageDS9, Fv or MATLAB etc), you will see a simulated sky brightness distribution of regular distributed sources. 
+If you want to test the code, please download the files from 'ExampleInput' of the corresponding reprojection method. Run the code by ```./sharedlibrary_gpu Visreal0.fits Visimag0.fits Bin0.fits Vin0.fits 4096 2080 50000000 0.0000213 dirty0.fits'''. You should obtain a FITS file named dirty0.fits. If you open it (by SAOImageDS9, Fv or MATLAB etc), you will see a simulated sky brightness distribution of regular distributed sources. 
 
 ## Contact
 If you have any questions or need further assistance, please feel free to contact at [egbdfmusic1@gmail.com](mailto:egbdfmusic1@gmail.com).
