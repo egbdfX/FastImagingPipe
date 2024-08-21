@@ -8,7 +8,7 @@ We have developed a GPU-accelerated SVD imager for fast imaging in radio astrono
 Make sure GCCcore, CUDA, and CFITSIO are avaiable. If you see a warning saying ```/usr/bin/ld.gold: warning: /apps/system/easybuild/software/GCCcore/11.2.0/lib/gcc/x86_64-pc-linux-gnu/11.2.0/crtbegin.o: unknown program property type 0xc0010002 in .note.gnu.property section```, you would need to make sure Python is also available.
 
 **Step 2:**
-If you do not need reprojection in the imaging, please download the files in 'NoReproj'; otherwise, please download the files in 'WithReproj' (will be released soon).
+If you do not need reprojection in the imaging, please download the files in 'NoReproj'; otherwise, please download the files in 'WithReproj'.
 
 **Step 3:**
 Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H100. If you are using other GPUs, you would need to make sure the CUDA arch is matching.
