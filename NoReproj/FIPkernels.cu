@@ -291,10 +291,6 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin, float* dirty_
 	cufftComplex* w_grid_stack_shifted;
 	float* output_index;
 	cudaError_t cudaError;
-	double *h_output_index = new double[image_size * image_size * 2];
-    for (size_t i = 0; i < image_size * image_size * 2; i++) {
-        h_output_index[i] = 0.0;
-    }
 	
 	cudaEvent_t start, stop, eventstream;
 	cudaEventCreate(&start);
