@@ -137,14 +137,14 @@ int main(int argc, char* argv[]) {
     float cell_size = std::stof(argv[8]);
     size_t num_snapshots = std::stoul(argv[9]);
     size_t unit_size = std::stoul(argv[10]);
-	sprintf(output_name, "%s", argv[11]);
+    sprintf(output_name, "%s", argv[11]);
 	
-	size_t unit_num = image_size/unit_size;
-	float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
+    size_t unit_num = image_size/unit_size;
+    float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
 	
-	FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, freq_hz, cell_size, unit_size);
+    FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, freq_hz, cell_size, unit_size);
 	
-	long naxes[2] = {long(unit_size), long(unit_size)};
+    long naxes[2] = {long(unit_size), long(unit_size)};
     int status = write_fits_image(output_name, result_array, naxes);
     if (status) {
         fprintf(stderr, "Error writing FITS image\n");
