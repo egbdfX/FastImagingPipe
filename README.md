@@ -1,6 +1,6 @@
 # Fast Imaging Pipeline
 
-We have developed a GPU-accelerated Fast Imaging (FI) Pipeline for transient detection in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. It is consist of two parts: SVD imager (see [SVD Imager](https://github.com/egbdfX/SVDimager)) and FI trigger (see [Fast Imaging Trigger](https://github.com/egbdfX/FastImagingTrigger)).
+We have developed a GPU-accelerated Fast Imaging (FI) Pipeline for transient detection in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FI pipeline consists of two components: SVD imager (see [SVD Imager](https://github.com/egbdfX/SVDimager)) and FI trigger (see [Fast Imaging Trigger](https://github.com/egbdfX/FastImagingTrigger)).
 
 ## User guidance
 
