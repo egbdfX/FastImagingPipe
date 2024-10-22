@@ -29,7 +29,7 @@ __constant__ float quadrature_kernel[14] = {
 };
 
 long int computeCeil(float num) {
-    if (num<0) {
+	if (num<0) {
 		return -floorf(-num);
 	} else {
 		return ceilf(num);
@@ -37,7 +37,7 @@ long int computeCeil(float num) {
 }
 
 long int computeFloor(float num) {
-    if (num<0) {
+	if (num<0) {
 		return -ceilf(-num);
 	} else {
 		return floorf(num);
@@ -45,7 +45,7 @@ long int computeFloor(float num) {
 }
 
 __device__ long int ceil_device(float num) {
-    if (num<0) {
+	if (num<0) {
 		return -floorf(-num);
 	} else {
 		return ceilf(num);
@@ -53,7 +53,7 @@ __device__ long int ceil_device(float num) {
 }
 
 __device__ long int floor_device(float num) {
-    if (num<0) {
+	if (num<0) {
 		return -ceilf(-num);
 	} else {
 		return floorf(num);
@@ -61,18 +61,18 @@ __device__ long int floor_device(float num) {
 }
 
 __device__ float fmod_device(float x, float y) {
-    return fmod(x, y);
+	return fmod(x, y);
 }
 
 __device__ float exp_semicircle(const float beta, float x){
-    const float xx = x*x;
+	const float xx = x*x;
     
-    return ((xx > float(1.0)) ? float(0.0) : exp(beta*(sqrt(float(1.0) - xx) - float(1.0))));
+	return ((xx > float(1.0)) ? float(0.0) : exp(beta*(sqrt(float(1.0) - xx) - float(1.0))));
 }
 
 __device__ void __sincosd(float angle, float &s, float &c) {
-    // angle in degrees
-    if (fmod(angle, 90.0f) == 0) {
+	// angle in degrees
+	if (fmod(angle, 90.0f) == 0) {
 		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f + 0.5f))) % 4;
 		switch (i) {
 			case 0:
@@ -93,14 +93,14 @@ __device__ void __sincosd(float angle, float &s, float &c) {
 				break;
 		}
 	} else {
-        s = sinf(angle * M_PI / 180.0f);
-        c = cosf(angle * M_PI / 180.0f);
-    }
+		s = sinf(angle * M_PI / 180.0f);
+		c = cosf(angle * M_PI / 180.0f);
+	}
 }
 
 __device__ float __sind(float angle) {
-    // angle in degrees
-    if (fmod(angle, 90.0f) == 0) {
+	// angle in degrees
+	if (fmod(angle, 90.0f) == 0) {
 		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f - 0.5f))) % 4;
 		switch (i) {
 			case 0:
@@ -113,13 +113,13 @@ __device__ float __sind(float angle) {
 				return 0.0f;
 		}
 	} else {
-        return sinf(angle * M_PI / 180.0f);
-    }
+		return sinf(angle * M_PI / 180.0f);
+	}
 }
 
 __device__ float __cosd(float angle) {
-    // angle in degrees
-    if (fmod(angle, 90.0f) == 0) {
+	// angle in degrees
+	if (fmod(angle, 90.0f) == 0) {
 		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f + 0.5f))) % 4;
 		switch (i) {
 			case 0:
@@ -132,57 +132,57 @@ __device__ float __cosd(float angle) {
 				return 0.0f;
 		}
 	} else {
-        return cosf(angle * M_PI / 180.0f);
-    }
+		return cosf(angle * M_PI / 180.0f);
+	}
 }
 
 __device__ float __atan2d(float y, float x) {
-    if (y == 0.0f) {
-        return (x >= 0.0f) ? 0.0f : 180.0f;
-    } else if (x == 0.0f) {
-        return (y > 0.0f) ? 90.0f : -90.0f;
-    } else {
-        return atan2f(y, x) * 180.0f / M_PI;
-    }
+	if (y == 0.0f) {
+		return (x >= 0.0f) ? 0.0f : 180.0f;
+	} else if (x == 0.0f) {
+		return (y > 0.0f) ? 90.0f : -90.0f;
+	} else {
+		return atan2f(y, x) * 180.0f / M_PI;
+	}
 }
 
 __device__ float __acosd(float v) {
-    if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
-        return 0.0f;
-    } else if (v == 0.0f) {
-        return 90.0f;
-    } else if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
-        return 180.0f;
-    } else {
-        return acosf(v) * 180.0f / M_PI;
-    }
+	if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
+		return 0.0f;
+	} else if (v == 0.0f) {
+		return 90.0f;
+	} else if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
+		return 180.0f;
+	} else {
+		return acosf(v) * 180.0f / M_PI;
+	}
 }
 
 __device__ float __asind(float v) {
-    if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
-        return -90.0f;
-    } else if (v == 0.0f) {
-        return 0.0f;
-    } else if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
-        return 90.0f;
-    } else {
-        return asinf(v) * 180.0f / M_PI;
-    }
+	if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
+		return -90.0f;
+	} else if (v == 0.0f) {
+		return 0.0f;
+	} else if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
+		return 90.0f;
+	} else {
+		return asinf(v) * 180.0f / M_PI;
+	}
 }
 
 __global__ void convolveKernel(float *conv_corr_kernel, size_t image_size, size_t grid_size, float conv_corr_norm_factor) {
-    const int support = 8;
-    size_t t1_t2 = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t1_t2 < image_size / 2 + 1) {
-        float t1_t2_norm = static_cast<float>(t1_t2) / grid_size;
-        float correction = 0.0;
-        float angle;
-        for (int i = 0; i < 14; ++i) {
-            angle = M_PI * t1_t2_norm * support * quadrature_nodes[i];
-            correction += quadrature_kernel[i] * quadrature_weights[i] * cosf(angle);
-        }
-        conv_corr_kernel[t1_t2] = correction * support / conv_corr_norm_factor;
-    }
+	const int support = 8;
+	size_t t1_t2 = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t1_t2 < image_size / 2 + 1) {
+		float t1_t2_norm = static_cast<float>(t1_t2) / grid_size;
+		float correction = 0.0;
+		float angle;
+		for (int i = 0; i < 14; ++i) {
+			angle = M_PI * t1_t2_norm * support * quadrature_nodes[i];
+			correction += quadrature_kernel[i] * quadrature_weights[i] * cosf(angle);
+		}
+		conv_corr_kernel[t1_t2] = correction * support / conv_corr_norm_factor;
+	}
 }
 
 __global__ void computeVisWeighted(float *Vis_real, float *Vis_imag, size_t num_baselines, float* V_in) {
@@ -199,12 +199,12 @@ __global__ void gridding(float* B_in, float* w_grid_stack_real, float* w_grid_st
 	const int support = 8;
 	int half_support = support / 2;
 	float inv_half_support = 1 / static_cast<float>(half_support);
-    long int grid_min_uv = -static_cast<long int>(grid_size) / 2;
-    long int grid_max_uv = (static_cast<long int>(grid_size) - 1) / 2;
-    long int origin_offset_uv = static_cast<long int>(grid_size) / 2;
-    const int KERNEL_SUPPORT_BOUND = 16;
-    const float beta = 15.3704324328;
-    float kernel_value;
+	long int grid_min_uv = -static_cast<long int>(grid_size) / 2;
+	long int grid_max_uv = (static_cast<long int>(grid_size) - 1) / 2;
+	long int origin_offset_uv = static_cast<long int>(grid_size) / 2;
+	const int KERNEL_SUPPORT_BOUND = 16;
+	const float beta = 15.3704324328;
+	float kernel_value;
 	
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	
@@ -212,12 +212,12 @@ __global__ void gridding(float* B_in, float* w_grid_stack_real, float* w_grid_st
 		float pos_u = B_in[idx*2+0] * inv_wavelength * uv_scale;
 		float pos_v = B_in[idx*2+1] * inv_wavelength * uv_scale;
 		long int grid_u_min = max(ceil_device(pos_u - half_support), grid_min_uv);
-        long int grid_u_max = min(floor_device(pos_u + half_support), grid_max_uv);
-        long int grid_v_min = max(ceil_device(pos_v - half_support), grid_min_uv);
-        long int grid_v_max = min(floor_device(pos_v + half_support), grid_max_uv);
-        if (grid_u_min > grid_u_max || grid_v_min > grid_v_max) {
-            return;
-        }
+		long int grid_u_max = min(floor_device(pos_u + half_support), grid_max_uv);
+		long int grid_v_min = max(ceil_device(pos_v - half_support), grid_min_uv);
+		long int grid_v_max = min(floor_device(pos_v + half_support), grid_max_uv);
+		if (grid_u_min > grid_u_max || grid_v_min > grid_v_max) {
+			return;
+		}
 		float kernel_u[KERNEL_SUPPORT_BOUND], kernel_v[KERNEL_SUPPORT_BOUND];
 		for (long int grid_u = grid_u_min; grid_u <= grid_u_max; grid_u++)
 		{
@@ -228,44 +228,44 @@ __global__ void gridding(float* B_in, float* w_grid_stack_real, float* w_grid_st
 			kernel_v[grid_v - grid_v_min] = exp_semicircle(beta,(static_cast<float>(grid_v) - pos_v) * inv_half_support);
 		}
 		
-        for (long int grid_u = grid_u_min; grid_u <= grid_u_max; grid_u++)
-        {
-            for (long int grid_v = grid_v_min; grid_v <= grid_v_max; grid_v++)
-            {
-                kernel_value = kernel_u[grid_u - grid_u_min] * kernel_v[grid_v - grid_v_min];
-                if (((grid_u + grid_v) & 1) != 0) {
+		for (long int grid_u = grid_u_min; grid_u <= grid_u_max; grid_u++)
+		{
+			for (long int grid_v = grid_v_min; grid_v <= grid_v_max; grid_v++)
+			{
+				kernel_value = kernel_u[grid_u - grid_u_min] * kernel_v[grid_v - grid_v_min];
+				if (((grid_u + grid_v) & 1) != 0) {
 					kernel_value = -kernel_value;
 				}
-                const long int grid_offset_uvw = (grid_u + origin_offset_uv) * static_cast<long int>(grid_size) + (grid_v + origin_offset_uv);
+				const long int grid_offset_uvw = (grid_u + origin_offset_uv) * static_cast<long int>(grid_size) + (grid_v + origin_offset_uv);
                         
-                atomicAdd(&w_grid_stack_real[grid_offset_uvw],Vis_real[idx] * kernel_value);
-                atomicAdd(&w_grid_stack_imag[grid_offset_uvw],Vis_imag[idx] * kernel_value);
-                }
+				atomicAdd(&w_grid_stack_real[grid_offset_uvw],Vis_real[idx] * kernel_value);
+				atomicAdd(&w_grid_stack_imag[grid_offset_uvw],Vis_imag[idx] * kernel_value);
+			}
 		}
 	}
 }
 
 __global__ void combineToComplex(float* w_real, float* w_imag, cufftComplex* complex_data, size_t grid_size) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t size = grid_size * grid_size;
-    if (idx < size) {
-        complex_data[idx].x = w_real[idx];
-        complex_data[idx].y = w_imag[idx];
-    }
+	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	size_t size = grid_size * grid_size;
+	if (idx < size) {
+		complex_data[idx].x = w_real[idx];
+		complex_data[idx].y = w_imag[idx];
+	}
 }
 
 __global__ void ifftShift(cufftComplex* data, cufftComplex* data_shifted, size_t NX, size_t NY) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
+	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (idx < NX && idy < NY) {
-        size_t new_x = (idx + NX / 2) % NX;
-        size_t new_y = (idy + NY / 2) % NY;
-        size_t old_id = idy * NX + idx;
-        size_t new_id = new_y * NX + new_x;
+	if (idx < NX && idy < NY) {
+		size_t new_x = (idx + NX / 2) % NX;
+		size_t new_y = (idy + NY / 2) % NY;
+		size_t old_id = idy * NX + idx;
+		size_t new_id = new_y * NX + new_x;
         
-        data_shifted[new_id] = data[old_id];
-    }
+		data_shifted[new_id] = data[old_id];
+	}
 }
 
 __global__ void accumulation(float* dirty_pre, cufftComplex* w_grid_stack_shifted, size_t image_size, size_t grid_size) {
@@ -273,30 +273,30 @@ __global__ void accumulation(float* dirty_pre, cufftComplex* w_grid_stack_shifte
 	size_t grid_index_offset_image_centre = grid_size*grid_size/2 + grid_size/2;
 	size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
+	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
-    if (idx < image_size && idy < image_size) { 
+	if (idx < image_size && idy < image_size) { 
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
 		float pixel_sum = w_grid_stack_shifted[grid_index_offset_image_centre + idy*grid_size + idx].x;
-        if (((abs(idx)+abs(idy)) & 1) != 0) {
+        	if (((abs(idx)+abs(idy)) & 1) != 0) {
 			pixel_sum = - pixel_sum;
 		}
 		dirty_pre[image_index_offset_image_centre + idy*image_size + idx] += pixel_sum;
-    }
+	}
 }
 
 __global__ void scaling(float* dirty_pre, float* conv_corr_kernel, size_t image_size, float conv_corr_norm_factor) {
 	size_t half_image_size = image_size / 2;
 	size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
+	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
 	
 	if (idx < image_size && idy < image_size) { 
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
         
-        dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
+        	dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
 		dirty_pre[image_index_offset_image_centre + idy * image_size + idx] = fabs(dirty_pre[image_index_offset_image_centre + idy * image_size + idx]);
 	}
 }
@@ -305,26 +305,25 @@ __global__ void coordschange(float* output_index, float* V_in, size_t image_size
 	size_t half_image_size = image_size / 2;
 	
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
+	size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
     
-    if (idx < image_size && idy < image_size) {
-        output_index[(idx*image_size+idy)*2+0] = (-V_in[0*3+0]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+0]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);
-        output_index[(idx*image_size+idy)*2+1] = (-V_in[0*3+1]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+1]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);	
+	if (idx < image_size && idy < image_size) {
+        	output_index[(idx*image_size+idy)*2+0] = (-V_in[0*3+0]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+0]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);
+        	output_index[(idx*image_size+idy)*2+1] = (-V_in[0*3+1]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+1]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);	
 	}
 }
 
 __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 	/* According to paper: M. R.  Calabretta, E. W.  Greisen, 'Representations of celestial coordinates in FITS,' A&A,395(3),1077-1122,2002.*/
 	
-    long int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
+	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
     
-    float xi = V_in[6]/V_in[8];
-    float eta = V_in[7]/V_in[8];
-    dc = dc / M_PI * 180;
+	float xi = V_in[6]/V_in[8];
+	float eta = V_in[7]/V_in[8];
+	dc = dc / M_PI * 180;
     
-    if (idx < di && idy < di) {
-		
+	if (idx < di && idy < di) {	
 		float p1 = output_index[(idx*di+idy)*2+0]; // p2
 		float p2 = output_index[(idx*di+idy)*2+1]; // p1
 		
@@ -393,11 +392,11 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 
 __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty, size_t image_size) {
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
-    size_t half_image_size = image_size / 2;
-    size_t image_index_offset_image_centre = static_cast<long int>(half_image_size*image_size + half_image_size);
+	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
+	size_t half_image_size = image_size / 2;
+	size_t image_index_offset_image_centre = static_cast<long int>(half_image_size*image_size + half_image_size);
     
-    if (idx < image_size && idy < image_size) {
+	if (idx < image_size && idy < image_size) {
 		float LL = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+0] - static_cast<float>(half_image_size);
 		float MM = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+1] - static_cast<float>(half_image_size);
 		
@@ -410,17 +409,17 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 				(1-LL+floor_device(LL))*(1-MM+floor_device(MM))*
 					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
 			);
-            atomicAdd(
+			atomicAdd(
 				&dirty[image_index_offset_image_centre+ceil_device(MM)*static_cast<long int>(image_size)+floor_device(LL)],
 				(1-LL+floor_device(LL))*(MM-floor_device(MM))*
 					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
 			);
-            atomicAdd(
+			atomicAdd(
 				&dirty[image_index_offset_image_centre+floor_device(MM)*static_cast<long int>(image_size)+ceil_device(LL)],
 				(LL-floor_device(LL))*(1-MM+floor_device(MM))*
 					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
 			);
-            atomicAdd(
+			atomicAdd(
 				&dirty[image_index_offset_image_centre+ceil_device(MM)*static_cast<long int>(image_size)+ceil_device(LL)],
 				(LL-floor_device(LL))*(MM-floor_device(MM))*
 					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
@@ -430,38 +429,38 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 }
 
 __global__ void setNonPositiveToC(float* restored, size_t size, float C) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    if (idx < size) {
-        restored[idx] = (restored[idx] <= 0) ? C : restored[idx];
-    }
+	if (idx < size) {
+		restored[idx] = (restored[idx] <= 0) ? C : restored[idx];
+	}
 }
 
 __global__ void subtraction(float* data_1, float* data_2, float* diff_out, size_t size) {
-    size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+	size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     
-    if (idx < size) {
-        diff_out[idx] = fabs(data_1[idx] - data_2[idx]);
-    }
+	if (idx < size) {
+		diff_out[idx] = fabs(data_1[idx] - data_2[idx]);
+	}
 }
 
 __global__ void max_large(float* dirty, float* result, size_t region_num, size_t region_size, size_t ima) {
 
-    extern  __shared__  float sharedNumDen[];
+	extern  __shared__  float sharedNumDen[];
     
-    size_t bid = blockIdx.x; // tile index
-    size_t tid = threadIdx.x;
+	size_t bid = blockIdx.x; // tile index
+	size_t tid = threadIdx.x;
     
-    size_t i_id = static_cast<size_t>(floor_device(bid/region_num));
-    size_t j_id = fmod_device(bid,region_num);
-    size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(region_size*region_size)/1024.0f));
+	size_t i_id = static_cast<size_t>(floor_device(bid/region_num));
+	size_t j_id = fmod_device(bid,region_num);
+	size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(region_size*region_size)/1024.0f));
     
-    size_t I_id;
-    size_t J_id;
-    size_t rows;
-    size_t cols;
+	size_t I_id;
+	size_t J_id;
+	size_t rows;
+	size_t cols;
     
-    for (size_t fac = 1; fac <= factor;fac = fac + 1){
+	for (size_t fac = 1; fac <= factor;fac = fac + 1){
 		if (tid+(fac-1)*1024 < region_size*region_size){
 			if (fac == 1) {
 				sharedNumDen[tid] = 0; // Max
@@ -480,7 +479,7 @@ __global__ void max_large(float* dirty, float* result, size_t region_num, size_t
 		}
 	}
     
-    for (size_t d = blockDim.x/2;d>0;d = d/2){
+	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		__syncthreads();
 		if (tid<d) {
 			sharedNumDen[tid] = max(sharedNumDen[tid], sharedNumDen[tid+d]);
@@ -494,14 +493,14 @@ __global__ void max_large(float* dirty, float* result, size_t region_num, size_t
 
 __global__ void max_small(float* max_tmp, float* maxall, size_t ima, int bid_ind) {
 	
-    extern  __shared__  float sharedNumDen[];
+	extern  __shared__  float sharedNumDen[];
     
-    size_t tid = threadIdx.x;
+	size_t tid = threadIdx.x;
     
-    sharedNumDen[tid] = max_tmp[tid];
-    __syncthreads();
+	sharedNumDen[tid] = max_tmp[tid];
+	__syncthreads();
     
-    for (size_t d = blockDim.x/2;d>0;d = d/2){
+	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		if (tid<d) {
 			sharedNumDen[tid] = max(sharedNumDen[tid], sharedNumDen[tid+d]);
 		}
@@ -515,21 +514,21 @@ __global__ void max_small(float* max_tmp, float* maxall, size_t ima, int bid_ind
 
 __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_size, size_t ima, size_t unit_num, float* maxall) {
 
-    extern  __shared__  float sharedNumDen[];
-    float maxallval = max(maxall[0], max(maxall[1], maxall[2]));
-    size_t bid = blockIdx.x; // tile index
-    size_t tid = threadIdx.x;
+	extern  __shared__  float sharedNumDen[];
+	float maxallval = max(maxall[0], max(maxall[1], maxall[2]));
+	size_t bid = blockIdx.x; // tile index
+	size_t tid = threadIdx.x;
     
-    size_t i_id = static_cast<size_t>(floor_device(bid/unit_num));
-    size_t j_id = fmod_device(bid,unit_num);
-    size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(unit_size*unit_size)/1024.0f));
+	size_t i_id = static_cast<size_t>(floor_device(bid/unit_num));
+	size_t j_id = fmod_device(bid,unit_num);
+	size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(unit_size*unit_size)/1024.0f));
     
-    size_t I_id;
-    size_t J_id;
-    size_t rows;
-    size_t cols;
+	size_t I_id;
+	size_t J_id;
+	size_t rows;
+	size_t cols;
     
-    for (size_t fac = 1; fac <= factor;fac = fac + 1){
+	for (size_t fac = 1; fac <= factor;fac = fac + 1){
 		if (tid+(fac-1)*1024 < unit_size*unit_size){
 			if (fac == 1) {
 				sharedNumDen[tid] = 0; // Sum of diff_out
@@ -554,7 +553,7 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 		}
 	}
     
-    for (size_t d = blockDim.x/2;d>0;d = d/2){
+	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		__syncthreads();
 		if (tid<d) {
 			sharedNumDen[tid] += sharedNumDen[tid+d];
@@ -583,7 +582,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	int bid_ind;
 	size_t shared_mem_size;
 	size_t region_num = 32;
-    size_t region_size = static_cast<size_t>(computeCeil(static_cast<float>(image_size)/static_cast<float>(region_num)));
+	size_t region_size = static_cast<size_t>(computeCeil(static_cast<float>(image_size)/static_cast<float>(region_num)));
 	
 	cudaEvent_t start, stop, eventstream[3], events[3], events_kernel[3];
 	cudaEventCreate(&start);
@@ -652,9 +651,9 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaStreamCreate(&stream_pcie);
 	
 	cufftHandle plan;
-    cufftCreate(&plan);
+	cufftCreate(&plan);
 	cufftSetStream(plan, stream1);
-    cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
+	cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
 	
 	size_t num_threads;
 	size_t num_blocks;
@@ -779,11 +778,11 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty3, image_size);
 	num_threads = 1024;
 	num_blocks = region_num*region_num;
-    shared_mem_size = num_threads * sizeof(float);
-    max_large<<<num_blocks,num_threads,shared_mem_size,stream1>>>(dirty3, max_tmp, region_num, region_size, image_size);
-    num_blocks = 1;
-    bid_ind = 2;
-    max_small<<<num_blocks,num_threads,shared_mem_size,stream1>>>(max_tmp, maxall, image_size, bid_ind);
+	shared_mem_size = num_threads * sizeof(float);
+	max_large<<<num_blocks,num_threads,shared_mem_size,stream1>>>(dirty3, max_tmp, region_num, region_size, image_size);
+	num_blocks = 1;
+	bid_ind = 2;
+	max_small<<<num_blocks,num_threads,shared_mem_size,stream1>>>(max_tmp, maxall, image_size, bid_ind);
 	
 	cudaStreamSynchronize(stream1);
 	
@@ -803,10 +802,10 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	}
 	
 	cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
-    cudaStreamDestroy(stream_pcie);
+	cudaStreamDestroy(stream2);
+	cudaStreamDestroy(stream_pcie);
     
-    cudaFree(dirty_pre);
+	cudaFree(dirty_pre);
 	cudaFree(conv_corr_kernel);
 	cudaFree(w_grid_stack_real);
 	cudaFree(w_grid_stack_imag);
@@ -831,24 +830,24 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	
 	// FI Trigger
 	float* d_data_1;
-    float* d_data_2;
-    float* diff_out;
-    float* result_data;
-    float C = 1e-6;
+	float* d_data_2;
+	float* diff_out;
+	float* result_data;
+	float C = 1e-6;
     
-    size_t unit_num = image_size/unit_size;
+	size_t unit_num = image_size/unit_size;
     
-    cudaMalloc((void**)&d_data_1, image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&d_data_2,  image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&diff_out,  image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&result_data, unit_num * unit_num * sizeof(float));
+	cudaMalloc((void**)&d_data_1, image_size * image_size * sizeof(float));
+	cudaMalloc((void**)&d_data_2,  image_size * image_size * sizeof(float));
+	cudaMalloc((void**)&diff_out,  image_size * image_size * sizeof(float));
+	cudaMalloc((void**)&result_data, unit_num * unit_num * sizeof(float));
     
-    cudaMemset(d_data_1, 0, image_size * image_size * sizeof(float));
-    cudaMemset(d_data_2, 0, image_size * image_size * sizeof(float));
-    cudaMemset(diff_out, 0, image_size * image_size * sizeof(float));
-    cudaMemset(result_data, 0, unit_num * unit_num * sizeof(float));
+	cudaMemset(d_data_1, 0, image_size * image_size * sizeof(float));
+	cudaMemset(d_data_2, 0, image_size * image_size * sizeof(float));
+	cudaMemset(diff_out, 0, image_size * image_size * sizeof(float));
+	cudaMemset(result_data, 0, unit_num * unit_num * sizeof(float));
 
-    cudaEvent_t start1, stop1;
+	cudaEvent_t start1, stop1;
 	cudaEventCreate(&start1);
 	cudaEventCreate(&stop1);
 
@@ -856,14 +855,14 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	/* ****************************************************** */
 	size_t size = image_size * image_size;
 	num_threads = 1024;
-    num_blocks = computeCeil(static_cast<float>(size)/num_threads);
-    subtraction<<<num_blocks,num_threads>>>(dirty1, dirty2, d_data_1, size);
-    subtraction<<<num_blocks,num_threads>>>(dirty2, dirty3, d_data_2, size);
+	num_blocks = computeCeil(static_cast<float>(size)/num_threads);
+	subtraction<<<num_blocks,num_threads>>>(dirty1, dirty2, d_data_1, size);
+	subtraction<<<num_blocks,num_threads>>>(dirty2, dirty3, d_data_2, size);
 	setNonPositiveToC<<<num_blocks,num_threads>>>(dirty2, size, C); // Be careful about this, because when there are a lot of trigger, this may cause trouble (because the image dirty2 has been changed by this).
-    subtraction<<<num_blocks,num_threads>>>(d_data_1, d_data_2, diff_out, size);
-    num_blocks = unit_num*unit_num;
-    shared_mem_size = 3 * num_threads * sizeof(float);
-    tlisi<<<num_blocks,num_threads,shared_mem_size>>>(diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+	subtraction<<<num_blocks,num_threads>>>(d_data_1, d_data_2, diff_out, size);
+	num_blocks = unit_num*unit_num;
+	shared_mem_size = 3 * num_threads * sizeof(float);
+	tlisi<<<num_blocks,num_threads,shared_mem_size>>>(diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
 	/* ****************************************************** */
 	cudaEventRecord(stop1);
 	cudaEventSynchronize(stop1);
@@ -876,10 +875,10 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	
 	cudaMemcpy(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost);
 	
-    cudaFree(d_data_1);
-    cudaFree(d_data_2);
-    cudaFree(diff_out);
-    cudaFree(result_data);
+	cudaFree(d_data_1);
+	cudaFree(d_data_2);
+	cudaFree(diff_out);
+	cudaFree(result_data);
 	cudaFree(dirty1);
 	cudaFree(dirty2);
 	cudaFree(dirty3);
