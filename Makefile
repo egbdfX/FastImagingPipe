@@ -1,5 +1,5 @@
 INC := -I$(CUDA_HOME)/include -I.
-LIB := -L$(CUDA_HOME)/lib64 -lcudart -lcurand -lcfitsio -lcufft
+LIB := -L$(CUDA_HOME)/lib64 -lcudart -lcfitsio -lcufft
 GCC := g++
 NVCC := ${CUDA_HOME}/bin/nvcc
 
