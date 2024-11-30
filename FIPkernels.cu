@@ -645,10 +645,10 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 		printf("No CUDA error 1.\n");
 	}
 	
-	cudaStream_t stream1, stream2, stream_pcie;
+	cudaStream_t stream1, stream2, stream3;
 	cudaStreamCreate(&stream1);
 	cudaStreamCreate(&stream2);
-	cudaStreamCreate(&stream_pcie);
+	cudaStreamCreate(&stream3);
 	
 	cufftHandle plan;
 	cufftCreate(&plan);
@@ -663,17 +663,17 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaEventRecord(start);
 	/* ****************************************************** */
 	for (int ind = 0; ind < 3; ++ind){
-		cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real+static_cast<size_t>(ind)*num_baselines, num_baselines * 1 * sizeof(float), cudaMemcpyHostToDevice, stream_pcie);
-		cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag+static_cast<size_t>(ind)*num_baselines, num_baselines * 1 * sizeof(float), cudaMemcpyHostToDevice, stream_pcie);
-		cudaMemcpyAsync(B_intmp, pinned_B_in+static_cast<size_t>(ind)*num_baselines*2, num_baselines * 2 * sizeof(float), cudaMemcpyHostToDevice, stream_pcie);
-		cudaMemcpyAsync(V_intmp, pinned_V_in+static_cast<size_t>(ind)*9, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_pcie); // cross term included
+		cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real+static_cast<size_t>(ind)*num_baselines, num_baselines * 1 * sizeof(float), cudaMemcpyHostToDevice, stream3);
+		cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag+static_cast<size_t>(ind)*num_baselines, num_baselines * 1 * sizeof(float), cudaMemcpyHostToDevice, stream3);
+		cudaMemcpyAsync(B_intmp, pinned_B_in+static_cast<size_t>(ind)*num_baselines*2, num_baselines * 2 * sizeof(float), cudaMemcpyHostToDevice, stream3);
+		cudaMemcpyAsync(V_intmp, pinned_V_in+static_cast<size_t>(ind)*9, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
 	    
 		if (ind == 0) {
-			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(B_in, B_intmp, num_baselines * 2 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(V_in, V_intmp, 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaEventRecord(events[ind],stream_pcie);
+			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(B_in, B_intmp, num_baselines * 2 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(V_in, V_intmp, 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaEventRecord(events[ind],stream3);
 		}
 
 		else{
@@ -733,12 +733,12 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			
 			cudaEventRecord(events_kernel[ind],stream1);
 			
-			cudaStreamWaitEvent(stream_pcie,events_kernel[ind],0);
-			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(B_in, B_intmp, num_baselines * 2 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaMemcpyAsync(V_in, V_intmp, 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream_pcie);
-			cudaEventRecord(events[ind],stream_pcie);
+			cudaStreamWaitEvent(stream3,events_kernel[ind],0);
+			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(B_in, B_intmp, num_baselines * 2 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaMemcpyAsync(V_in, V_intmp, 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+			cudaEventRecord(events[ind],stream3);
 		}
 	}
 	
@@ -803,7 +803,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	
 	cudaStreamDestroy(stream1);
 	cudaStreamDestroy(stream2);
-	cudaStreamDestroy(stream_pcie);
+	cudaStreamDestroy(stream3);
     
 	cudaFree(dirty_pre);
 	cudaFree(conv_corr_kernel);
