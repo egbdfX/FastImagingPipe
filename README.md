@@ -20,6 +20,9 @@ Here, ```Visreal_input.fits```, ```Visimag_input.fits```, ```B_input.fits```, an
 **Step 4:**
 The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output tLISI matrix.
 
+## Test
+If you want to test the code, please download the files from 'ExampleInput'. Run the code by ```./sharedlibrary_gpu Visreal.fits Visimag.fits Bin.fits Vin.fits 4096 130816 140000000 0.0000072722 3 32 locations.fits```. You should obtain a FITS file named locations.fits.
+
 ## Contact
 If you have any questions or need further assistance, please feel free to contact at [egbdfmusic1@gmail.com](mailto:egbdfmusic1@gmail.com).
 
