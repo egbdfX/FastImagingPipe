@@ -557,7 +557,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
 	float *dirty1, *dirty2, *dirty3;
 	float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *pixel_ind, *output_index, *max_tmp, *maxall;
-	cudaError_t cudaStatus, cudaError;
+	cudaError_t cudaError;
 	cufftComplex *r_grid_stack;
 	int bid_ind;
 	size_t shared_mem_size;
