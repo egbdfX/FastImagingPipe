@@ -137,6 +137,7 @@ int write_fits_image(const char* filename, float *image_data, long* naxes) {
 }
 
 int main(int argc, char* argv[]) {
+    (void)argc;
     char input_Visreal[1000];
     char input_Visimag[1000];
     char input_Bin[1000];
