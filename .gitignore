@@ -1,0 +1,58 @@
+# C, C++, CUDA compiled outputs
+## Dependencies, prerequisites
+*.d
+
+## Object files
+*.o
+*.obj
+*.so
+
+## Precompiled Headers
+*.gch
+*.pch
+
+## Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+## Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+## Executables
+*.exe
+*.out
+*.app
+
+## Debug files
+*.dSYM/
+*.dwarf
+*.dwf
+*.dwz
+
+
+
+# Python
+## Python bytecode & caches
+__pycache__/
+*.py[codz]
+
+## Python distribution / packaging
+build/
+dist/
+sdist/
+wheels/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+MANIFEST
+
+
+
+# Ignorable files particular to this project
+sharedlibrary_gpu

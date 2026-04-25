@@ -259,7 +259,7 @@ __global__ void accumulation(float* dirty_pre, cufftComplex* r_grid_stack_shifte
 	size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
 	if (idx < image_size && idy < image_size) { 
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
@@ -280,21 +280,21 @@ __global__ void scaling(float* dirty_pre, float* conv_corr_kernel, size_t image_
 	if (idx < image_size && idy < image_size) { 
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
-        
-        dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
+
+		dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
 		dirty_pre[image_index_offset_image_centre + idy * image_size + idx] = fabs(dirty_pre[image_index_offset_image_centre + idy * image_size + idx]);
 	}
 }
 
 __global__ void coordschange(float* output_index, float* V_in, size_t image_size) {
 	size_t half_image_size = image_size / 2;
-	
+
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
 	if (idx < image_size && idy < image_size) {
-        	output_index[(idx*image_size+idy)*2+0] = (-V_in[0*3+0]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+0]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);
-        	output_index[(idx*image_size+idy)*2+1] = (-V_in[0*3+1]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+1]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);	
+		output_index[(idx*image_size+idy)*2+0] = (-V_in[0*3+0]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+0]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);
+		output_index[(idx*image_size+idy)*2+1] = (-V_in[0*3+1]*(static_cast<float>(idx) - static_cast<float>(half_image_size))+V_in[1*3+1]*(static_cast<float>(idy) - static_cast<float>(half_image_size)))/fabs(V_in[2*3+2]) + static_cast<float>(half_image_size);
 	}
 }
 
@@ -303,11 +303,11 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 	
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
 	float xi = V_in[6]/V_in[8];
 	float eta = V_in[7]/V_in[8];
 	dc = dc / M_PI * 180;
-    
+
 	if (idx < di && idy < di) {	
 		float p1 = output_index[(idx*di+idy)*2+0]; // p2
 		float p2 = output_index[(idx*di+idy)*2+1]; // p1
@@ -380,7 +380,7 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
 	size_t half_image_size = image_size / 2;
 	size_t image_index_offset_image_centre = static_cast<long int>(half_image_size*image_size + half_image_size);
-    
+
 	if (idx < image_size && idy < image_size) {
 		float LL = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+0] - static_cast<float>(half_image_size);
 		float MM = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+1] - static_cast<float>(half_image_size);
@@ -415,7 +415,7 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 
 __global__ void setNonPositiveToC(float* restored, size_t size, float C) {
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
 	if (idx < size) {
 		restored[idx] = (restored[idx] <= 0) ? C : restored[idx];
 	}
@@ -432,19 +432,19 @@ __global__ void subtraction(float* data_1, float* data_2, float* diff_out, size_
 __global__ void max_large(float* dirty, float* result, size_t region_num, size_t region_size, size_t ima) {
 
 	extern  __shared__  float sharedNumDen[];
-    
+
 	size_t bid = blockIdx.x; // tile index
 	size_t tid = threadIdx.x;
-    
+
 	size_t i_id = static_cast<size_t>(floor_device(bid/region_num));
 	size_t j_id = fmod_device(bid,region_num);
 	size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(region_size*region_size)/1024.0f));
-    
+
 	size_t I_id;
 	size_t J_id;
 	size_t rows;
 	size_t cols;
-    
+
 	for (size_t fac = 1; fac <= factor;fac = fac + 1){
 		if (tid+(fac-1)*1024 < region_size*region_size){
 			if (fac == 1) {
@@ -463,14 +463,14 @@ __global__ void max_large(float* dirty, float* result, size_t region_num, size_t
 			}
 		}
 	}
-    
+
 	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		__syncthreads();
 		if (tid<d) {
 			sharedNumDen[tid] = max(sharedNumDen[tid], sharedNumDen[tid+d]);
 		}
 	}
-	
+
 	if (tid==0) {
 		result[bid] = sharedNumDen[0];
 	}
@@ -479,12 +479,12 @@ __global__ void max_large(float* dirty, float* result, size_t region_num, size_t
 __global__ void max_small(float* max_tmp, float* maxall, size_t ima, int bid_ind) {
 	
 	extern  __shared__  float sharedNumDen[];
-    
+
 	size_t tid = threadIdx.x;
-    
+
 	sharedNumDen[tid] = max_tmp[tid];
 	__syncthreads();
-    
+
 	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		if (tid<d) {
 			sharedNumDen[tid] = max(sharedNumDen[tid], sharedNumDen[tid+d]);
@@ -507,12 +507,12 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 	size_t i_id = static_cast<size_t>(floor_device(bid/unit_num));
 	size_t j_id = fmod_device(bid,unit_num);
 	size_t factor = static_cast<size_t>(ceil_device(static_cast<float>(unit_size*unit_size)/1024.0f));
-    
+
 	size_t I_id;
 	size_t J_id;
 	size_t rows;
 	size_t cols;
-    
+
 	for (size_t fac = 1; fac <= factor;fac = fac + 1){
 		if (tid+(fac-1)*1024 < unit_size*unit_size){
 			if (fac == 1) {
@@ -537,7 +537,7 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 			}
 		}
 	}
-    
+
 	for (size_t d = blockDim.x/2;d>0;d = d/2){
 		__syncthreads();
 		if (tid<d) {
@@ -546,7 +546,7 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 			sharedNumDen[tid+2048] += sharedNumDen[tid+2048+d];
 		}
 	}
-	
+
 	if (tid==0) {
 		result[bid] = 1-(sharedNumDen[0]/unit_size/unit_size)*sharedNumDen[1024]*(sharedNumDen[2048]/unit_size/unit_size)/maxallval/maxallval;
 	}
@@ -567,7 +567,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	size_t shared_mem_size;
 	size_t region_num = 32;
 	size_t region_size = static_cast<size_t>(computeCeil(static_cast<float>(image_size)/static_cast<float>(region_num)));
-	
+
 	cudaEvent_t start, stop, eventstream[3], events[3], events_kernel[3];
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
@@ -580,11 +580,11 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaEventCreate(&events_kernel[0]);
 	cudaEventCreate(&events_kernel[1]);
 	cudaEventCreate(&events_kernel[2]);
-	
+
 	size_t grid_size = static_cast<size_t>(computeCeil(1.5*static_cast<float>(image_size)));
 	float r1r2_scale = cell_size*grid_size;
 	float conv_corr_norm_factor = 2.4937047051153827;
-	
+
 	cudaMalloc((void**)&dirty1, image_size * image_size * sizeof(float));
 	cudaMalloc((void**)&dirty2, image_size * image_size * sizeof(float));
 	cudaMalloc((void**)&dirty3, image_size * image_size * sizeof(float));
@@ -605,7 +605,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaMalloc((void**)&Vis_imag, num_baselines * 1 * sizeof(float));
 	cudaMalloc((void**)&B_in, num_baselines * 2 * sizeof(float));
 	cudaMalloc((void**)&V_in, 3 * 3 * sizeof(float));
-	
+
 	cudaMallocHost((void**)&pinned_Vis_real, num_baselines*num_snapshots*sizeof(float));
 	cudaMallocHost((void**)&pinned_Vis_imag, num_baselines*num_snapshots*sizeof(float));
 	cudaMallocHost((void**)&pinned_B_in, num_baselines*2*num_snapshots*sizeof(float));
@@ -614,11 +614,11 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	memcpy(pinned_Vis_imag, Visimag, num_baselines*num_snapshots*sizeof(float));
 	memcpy(pinned_B_in, Bin, num_baselines*2*num_snapshots*sizeof(float));
 	memcpy(pinned_V_in, Vin, 3*3*num_snapshots*sizeof(float));
-	
+
 	cudaMemset(dirty1, 0, image_size * image_size * sizeof(float));
 	cudaMemset(dirty2, 0, image_size * image_size * sizeof(float));
 	cudaMemset(dirty3, 0, image_size * image_size * sizeof(float));
-	
+
 	cudaError = cudaGetLastError();
 	if(cudaError != cudaSuccess){
 		printf("ERROR! GPU Kernel 1 error.\n");
@@ -627,22 +627,22 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	else {
 		printf("No CUDA error 1.\n");
 	}
-	
+
 	cudaStream_t stream1, stream2, stream3;
 	cudaStreamCreate(&stream1);
 	cudaStreamCreate(&stream2);
 	cudaStreamCreate(&stream3);
-	
+
 	cufftHandle plan;
 	cufftCreate(&plan);
 	cufftSetStream(plan, stream1);
 	cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
-	
+
 	size_t num_threads;
 	size_t num_blocks;
 	dim3 numThreads;
 	dim3 numBlocks;
-	
+
 	cudaEventRecord(start);
 	/* ****************************************************** */
 	for (int ind = 0; ind < 3; ++ind){
@@ -650,7 +650,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 		cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag+static_cast<size_t>(ind)*num_baselines, num_baselines * 1 * sizeof(float), cudaMemcpyHostToDevice, stream3);
 		cudaMemcpyAsync(B_intmp, pinned_B_in+static_cast<size_t>(ind)*num_baselines*2, num_baselines * 2 * sizeof(float), cudaMemcpyHostToDevice, stream3);
 		cudaMemcpyAsync(V_intmp, pinned_V_in+static_cast<size_t>(ind)*9, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
-	    
+
 		if (ind == 0) {
 			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
 			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
@@ -662,13 +662,13 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 		else{
 			cudaStreamWaitEvent(stream1,events[ind-1],0);
 			cudaStreamWaitEvent(stream2,events[ind-1],0);
-			
+
 			cudaMemsetAsync(dirty_pre, 0, image_size * image_size * sizeof(float),stream1);
 			cudaMemsetAsync(conv_corr_kernel, 0, (image_size/2+1) * sizeof(float),stream2);
 			cudaMemsetAsync(r_grid_stack_real, 0, grid_size * grid_size * sizeof(float),stream1);
 			cudaMemsetAsync(r_grid_stack_imag, 0, grid_size * grid_size * sizeof(float),stream1);
 			cudaMemsetAsync(output_index, 0, image_size * image_size * 2 * sizeof(float),stream2);
-			
+
 			num_threads = 1024;
 			num_blocks = computeCeil(static_cast<float>(image_size/2+1)/num_threads);
 			convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
@@ -687,7 +687,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			scaling<<<numBlocks,numThreads,0,stream1>>>(dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
 			coordschange<<<numBlocks,numThreads,0,stream2>>>(output_index, V_in, image_size);
 			p2p<<<numBlocks,numThreads,0,stream2>>>(output_index, V_in, cell_size, image_size);
-			
+
 			cudaEventRecord(eventstream[ind-1],stream2);
 			cudaStreamWaitEvent(stream1,eventstream[ind-1],0);
 			if (ind == 1) {
@@ -710,9 +710,9 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 				bid_ind = ind - 1;
 				max_small<<<num_blocks,num_threads,shared_mem_size,stream1>>>(max_tmp, maxall, image_size, bid_ind);
 			}
-			
+
 			cudaEventRecord(events_kernel[ind],stream1);
-			
+
 			cudaStreamWaitEvent(stream3,events_kernel[ind],0);
 			cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
 			cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines * 1 * sizeof(float), cudaMemcpyDeviceToDevice, stream3);
@@ -721,16 +721,16 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			cudaEventRecord(events[ind],stream3);
 		}
 	}
-	
+
 	cudaStreamWaitEvent(stream1,events[2],0);
 	cudaStreamWaitEvent(stream2,events[2],0);
-	
+
 	cudaMemsetAsync(dirty_pre, 0, image_size * image_size * sizeof(float),stream1);
 	cudaMemsetAsync(conv_corr_kernel, 0, (image_size/2+1) * sizeof(float),stream2);
 	cudaMemsetAsync(r_grid_stack_real, 0, grid_size * grid_size * sizeof(float),stream1);
 	cudaMemsetAsync(r_grid_stack_imag, 0, grid_size * grid_size * sizeof(float),stream1);
 	cudaMemsetAsync(output_index, 0, image_size * image_size * 2 * sizeof(float),stream2);
-			
+
 	num_threads = 1024;
 	num_blocks = computeCeil(static_cast<float>(image_size/2+1)/num_threads);
 	convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
@@ -749,7 +749,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	scaling<<<numBlocks,numThreads,0,stream1>>>(dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
 	coordschange<<<numBlocks,numThreads,0,stream2>>>(output_index, V_in, image_size);
 	p2p<<<numBlocks,numThreads,0,stream2>>>(output_index, V_in, cell_size, image_size);
-		
+
 	cudaEventRecord(eventstream[2],stream2);
 	cudaStreamWaitEvent(stream1,eventstream[2],0);
 	finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty3, image_size);
@@ -760,9 +760,9 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	num_blocks = 1;
 	bid_ind = 2;
 	max_small<<<num_blocks,num_threads,shared_mem_size,stream1>>>(max_tmp, maxall, image_size, bid_ind);
-	
+
 	cudaStreamSynchronize(stream1);
-	
+
 	/* ****************************************************** */
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
@@ -771,17 +771,17 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	std::cout << "Time elapsed: " << milliseconds << " ms" << std::endl;
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
-	
+
 	for (int i = 0; i < 3; i++){
 		cudaEventDestroy(eventstream[i]);
 		cudaEventDestroy(events[i]);
 		cudaEventDestroy(events_kernel[i]);
 	}
-	
+
 	cudaStreamDestroy(stream1);
 	cudaStreamDestroy(stream2);
 	cudaStreamDestroy(stream3);
-    
+
 	cudaFree(dirty_pre);
 	cudaFree(conv_corr_kernel);
 	cudaFree(r_grid_stack_real);
@@ -798,26 +798,26 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaFree(Vis_imag);
 	cudaFree(B_in);
 	cudaFree(V_in);
-	
+
 	cudaFreeHost(pinned_Vis_real);
 	cudaFreeHost(pinned_Vis_imag);
 	cudaFreeHost(pinned_B_in);
 	cudaFreeHost(pinned_V_in);
-	
+
 	// FI Trigger
 	float* d_data_1;
 	float* d_data_2;
 	float* diff_out;
 	float* result_data;
 	float C = 1e-6;
-    
+
 	size_t unit_num = image_size/unit_size;
-    
+
 	cudaMalloc((void**)&d_data_1, image_size * image_size * sizeof(float));
 	cudaMalloc((void**)&d_data_2,  image_size * image_size * sizeof(float));
 	cudaMalloc((void**)&diff_out,  image_size * image_size * sizeof(float));
 	cudaMalloc((void**)&result_data, unit_num * unit_num * sizeof(float));
-    
+
 	cudaMemset(d_data_1, 0, image_size * image_size * sizeof(float));
 	cudaMemset(d_data_2, 0, image_size * image_size * sizeof(float));
 	cudaMemset(diff_out, 0, image_size * image_size * sizeof(float));
@@ -848,9 +848,9 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 
 	cudaEventDestroy(start1);
 	cudaEventDestroy(stop1);
-	
+
 	cudaMemcpy(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost);
-	
+
 	cudaFree(d_data_1);
 	cudaFree(d_data_2);
 	cudaFree(diff_out);
@@ -858,7 +858,6 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaFree(dirty1);
 	cudaFree(dirty2);
 	cudaFree(dirty3);
-	
+
 	return 0;
 }
-	

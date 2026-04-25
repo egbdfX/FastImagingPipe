@@ -23,5 +23,5 @@ pipe_interface.o: pipe_interface.cpp
 FIPkernels.o: FIPkernels.cu
 	$(NVCC) -c FIPkernels.cu  $(NVCCFLAGS) -o FIPkernels.o
 
-clean:	
+clean:
 	rm -f *.o *.so
