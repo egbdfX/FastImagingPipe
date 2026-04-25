@@ -87,7 +87,7 @@ __device__ void __sincosd(float angle, float &s, float &c) {
 				s = 0.0f;
 				c = -1.0f;
 				break;
-			case 3:
+			default:
 				s = (angle > 0.0f) ? -1.0f : 1.0f;
 				c = 0.0f;
 				break;
@@ -105,11 +105,9 @@ __device__ float __sind(float angle) {
 		switch (i) {
 			case 0:
 				return 1.0f;
-			case 1:
-				return 0.0f;
 			case 2:
 				return -1.0f;
-			case 3:
+			default:
 				return 0.0f;
 		}
 	} else {
@@ -124,11 +122,9 @@ __device__ float __cosd(float angle) {
 		switch (i) {
 			case 0:
 				return 1.0f;
-			case 1:
-				return 0.0f;
 			case 2:
 				return -1.0f;
-			case 3:
+			default:
 				return 0.0f;
 		}
 	} else {
