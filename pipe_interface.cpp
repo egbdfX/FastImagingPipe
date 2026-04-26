@@ -5,7 +5,7 @@
 #include <iostream>
 #include <chrono>
 
-int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin, float* result_array, size_t num_baselines, size_t image_size, size_t num_snapshots, float freq_hz, float cell_size, size_t unit_size);
+int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin, float* result_array, size_t num_baselines, size_t image_size, size_t num_snapshots, float cell_size, size_t unit_size);
            
 using namespace std;
 
@@ -26,27 +26,64 @@ float* read_fits_image(const char* filename, long* naxes) {
         fits_close_file(fptr, &status);
         return NULL;
     }
-    fits_get_img_size(fptr, 2, naxes, &status);
-    if (status) {
-        fits_report_error(stderr, status);
+    
+    printf("DEBUG: Reading %s, naxis=%d\n", filename, naxis);
+    
+    // CRITICAL FIX: Handle 1D and 2D arrays differently
+    long total_elements;
+    if (naxis == 1) {
+        // For 1D arrays, only get one dimension
+        long temp_naxes[1];
+        fits_get_img_size(fptr, 1, temp_naxes, &status);
+        if (status) {
+            fits_report_error(stderr, status);
+            fits_close_file(fptr, &status);
+            return NULL;
+        }
+        naxes[0] = temp_naxes[0];
+        naxes[1] = 1;  // Force second dimension to 1 for consistency
+        total_elements = naxes[0];
+        printf("DEBUG: 1D array, naxes[0]=%ld, total_elements=%ld\n", naxes[0], total_elements);
+    } else if (naxis == 2) {
+        // For 2D arrays, get both dimensions
+        fits_get_img_size(fptr, 2, naxes, &status);
+        if (status) {
+            fits_report_error(stderr, status);
+            fits_close_file(fptr, &status);
+            return NULL;
+        }
+        total_elements = naxes[0] * naxes[1];
+        printf("DEBUG: 2D array, naxes[0]=%ld, naxes[1]=%ld, total_elements=%ld\n", 
+               naxes[0], naxes[1], total_elements);
+    } else {
+        fprintf(stderr, "ERROR: Unsupported naxis=%d for file %s\n", naxis, filename);
         fits_close_file(fptr, &status);
         return NULL;
     }
 
-    float *image_data = (float *)malloc(naxes[0] * naxes[1] * sizeof(float));
+    // Allocate based on actual total elements
+    float *image_data = (float *)malloc(total_elements * sizeof(float));
     if (image_data == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
+        fprintf(stderr, "ERROR: Memory allocation failed for %ld elements (%.2f MB)\n", 
+                total_elements, (total_elements * sizeof(float)) / (1024.0 * 1024.0));
         fits_close_file(fptr, &status);
         return NULL;
     }
 
-    fits_read_img(fptr, TFLOAT, 1, naxes[0] * naxes[1], NULL, image_data, NULL, &status);
+    printf("DEBUG: Allocated %.2f MB for %ld elements\n", 
+           (total_elements * sizeof(float)) / (1024.0 * 1024.0), total_elements);
+
+    // Read the actual number of elements
+    fits_read_img(fptr, TFLOAT, 1, total_elements, NULL, image_data, NULL, &status);
     if (status) {
         fits_report_error(stderr, status);
         free(image_data);
         fits_close_file(fptr, &status);
         return NULL;
     }
+
+    printf("DEBUG: Successfully read %ld elements, first value=%.6e, last value=%.6e\n", 
+           total_elements, image_data[0], image_data[total_elements-1]);
 
     fits_close_file(fptr, &status);
     if (status) {
@@ -61,14 +98,14 @@ float* read_fits_image(const char* filename, long* naxes) {
 int write_fits_image(const char* filename, float *image_data, long* naxes) {
     fitsfile *fptr;
     int status = 0;
-	
+    
     fitsfile *tmp_fptr;
     fits_open_file(&tmp_fptr, filename, READWRITE, &status);
     if (!status) {
         fits_delete_file(tmp_fptr, &status);
     }
     status = 0;
-	
+
     fits_create_file(&fptr, filename, &status);
     if (status) {
         fits_report_error(stderr, status);
@@ -133,16 +170,15 @@ int main(int argc, char* argv[]) {
     
     size_t image_size = std::stoul(argv[5]);
     size_t num_baselines = std::stoul(argv[6]);
-    float freq_hz = std::stof(argv[7]);
-    float cell_size = std::stof(argv[8]);
-    size_t num_snapshots = std::stoul(argv[9]);
-    size_t unit_size = std::stoul(argv[10]);
-    sprintf(output_name, "%s", argv[11]);
+    float cell_size = std::stof(argv[7]);
+    size_t num_snapshots = std::stoul(argv[8]);
+    size_t unit_size = std::stoul(argv[9]);
+    sprintf(output_name, "%s", argv[10]);
 	
     size_t unit_num = image_size/unit_size;
     float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
 	
-    FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, freq_hz, cell_size, unit_size);
+    FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
 	
     long naxes[2] = {long(unit_size), long(unit_size)};
     int status = write_fits_image(output_name, result_array, naxes);
