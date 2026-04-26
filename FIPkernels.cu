@@ -194,14 +194,13 @@ __global__ void computeVisWeighted(float *Vis_real, float *Vis_imag, size_t num_
 	}
 }
 
-__global__ void gridding(float* B_in, float* w_grid_stack_real, float* w_grid_stack_imag, float* Vis_real, float* Vis_imag, float freq_hz, float uv_scale, size_t grid_size, size_t num_baselines) {
-	float inv_wavelength = freq_hz / 299792458;
+__global__ void gridding(float* B_in, float* r_grid_real, float* r_grid_imag, float* Vis_real, float* Vis_imag, float r1r2_scale, size_t grid_size, size_t num_baselines) {
 	const int support = 8;
 	int half_support = support / 2;
 	float inv_half_support = 1 / static_cast<float>(half_support);
-	long int grid_min_uv = -static_cast<long int>(grid_size) / 2;
-	long int grid_max_uv = (static_cast<long int>(grid_size) - 1) / 2;
-	long int origin_offset_uv = static_cast<long int>(grid_size) / 2;
+	long int grid_min_r1r2 = -static_cast<long int>(grid_size) / 2;
+	long int grid_max_r1r2 = (static_cast<long int>(grid_size) - 1) / 2;
+	long int origin_offset_r1r2 = static_cast<long int>(grid_size) / 2;
 	const int KERNEL_SUPPORT_BOUND = 16;
 	const float beta = 15.3704324328;
 	float kernel_value;
@@ -209,66 +208,52 @@ __global__ void gridding(float* B_in, float* w_grid_stack_real, float* w_grid_st
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	
 	if (idx < num_baselines) {
-		float pos_u = B_in[idx*2+0] * inv_wavelength * uv_scale;
-		float pos_v = B_in[idx*2+1] * inv_wavelength * uv_scale;
-		long int grid_u_min = max(ceil_device(pos_u - half_support), grid_min_uv);
-		long int grid_u_max = min(floor_device(pos_u + half_support), grid_max_uv);
-		long int grid_v_min = max(ceil_device(pos_v - half_support), grid_min_uv);
-		long int grid_v_max = min(floor_device(pos_v + half_support), grid_max_uv);
-		if (grid_u_min > grid_u_max || grid_v_min > grid_v_max) {
+		float pos_r1 = B_in[idx*2+0] * r1r2_scale;
+		float pos_r2 = B_in[idx*2+1] * r1r2_scale;
+		long int grid_r1_min = max(ceil_device(pos_r1 - half_support), grid_min_r1r2);
+		long int grid_r1_max = min(floor_device(pos_r1 + half_support), grid_max_r1r2);
+		long int grid_r2_min = max(ceil_device(pos_r2 - half_support), grid_min_r1r2);
+		long int grid_r2_max = min(floor_device(pos_r2 + half_support), grid_max_r1r2);
+		if (grid_r1_min > grid_r1_max || grid_r2_min > grid_r2_max) {
 			return;
 		}
-		float kernel_u[KERNEL_SUPPORT_BOUND], kernel_v[KERNEL_SUPPORT_BOUND];
-		for (long int grid_u = grid_u_min; grid_u <= grid_u_max; grid_u++)
+		float kernel_r1[KERNEL_SUPPORT_BOUND], kernel_r2[KERNEL_SUPPORT_BOUND];
+		for (long int grid_r1 = grid_r1_min; grid_r1 <= grid_r1_max; grid_r1++)
 		{
-			kernel_u[grid_u - grid_u_min] = exp_semicircle(beta,(static_cast<float>(grid_u) - pos_u) * inv_half_support);
+			kernel_r1[grid_r1 - grid_r1_min] = exp_semicircle(beta,(static_cast<float>(grid_r1) - pos_r1) * inv_half_support);
 		}
-		for (long int grid_v = grid_v_min; grid_v <= grid_v_max; grid_v++)
+		for (long int grid_r2 = grid_r2_min; grid_r2 <= grid_r2_max; grid_r2++)
 		{
-			kernel_v[grid_v - grid_v_min] = exp_semicircle(beta,(static_cast<float>(grid_v) - pos_v) * inv_half_support);
+			kernel_r2[grid_r2 - grid_r2_min] = exp_semicircle(beta,(static_cast<float>(grid_r2) - pos_r2) * inv_half_support);
 		}
 		
-		for (long int grid_u = grid_u_min; grid_u <= grid_u_max; grid_u++)
+		for (long int grid_r1 = grid_r1_min; grid_r1 <= grid_r1_max; grid_r1++)
 		{
-			for (long int grid_v = grid_v_min; grid_v <= grid_v_max; grid_v++)
+			for (long int grid_r2 = grid_r2_min; grid_r2 <= grid_r2_max; grid_r2++)
 			{
-				kernel_value = kernel_u[grid_u - grid_u_min] * kernel_v[grid_v - grid_v_min];
-				if (((grid_u + grid_v) & 1) != 0) {
+				kernel_value = kernel_r1[grid_r1 - grid_r1_min] * kernel_r2[grid_r2 - grid_r2_min];
+				if (((grid_r1 + grid_r2) & 1) != 0) {
 					kernel_value = -kernel_value;
 				}
-				const long int grid_offset_uvw = (grid_u + origin_offset_uv) * static_cast<long int>(grid_size) + (grid_v + origin_offset_uv);
+				const long int grid_offset_r1r2r3 = (grid_r1 + origin_offset_r1r2) * static_cast<long int>(grid_size) + (grid_r2 + origin_offset_r1r2);
                         
-				atomicAdd(&w_grid_stack_real[grid_offset_uvw],Vis_real[idx] * kernel_value);
-				atomicAdd(&w_grid_stack_imag[grid_offset_uvw],Vis_imag[idx] * kernel_value);
+				atomicAdd(&r_grid_real[grid_offset_r1r2r3],Vis_real[idx] * kernel_value);
+				atomicAdd(&r_grid_imag[grid_offset_r1r2r3],Vis_imag[idx] * kernel_value);
 			}
 		}
 	}
 }
 
-__global__ void combineToComplex(float* w_real, float* w_imag, cufftComplex* complex_data, size_t grid_size) {
+__global__ void combineToComplex(float* data_real, float* data_imag, cufftComplex* complex_data, size_t grid_size) {
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	size_t size = grid_size * grid_size;
 	if (idx < size) {
-		complex_data[idx].x = w_real[idx];
-		complex_data[idx].y = w_imag[idx];
+		complex_data[idx].x = data_real[idx];
+		complex_data[idx].y = data_imag[idx];
 	}
 }
 
-__global__ void ifftShift(cufftComplex* data, cufftComplex* data_shifted, size_t NX, size_t NY) {
-	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-	size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
-
-	if (idx < NX && idy < NY) {
-		size_t new_x = (idx + NX / 2) % NX;
-		size_t new_y = (idy + NY / 2) % NY;
-		size_t old_id = idy * NX + idx;
-		size_t new_id = new_y * NX + new_x;
-        
-		data_shifted[new_id] = data[old_id];
-	}
-}
-
-__global__ void accumulation(float* dirty_pre, cufftComplex* w_grid_stack_shifted, size_t image_size, size_t grid_size) {
+__global__ void accumulation(float* dirty_pre, cufftComplex* r_grid_stack_shifted, size_t image_size, size_t grid_size) {
 	size_t half_image_size = image_size / 2;
 	size_t grid_index_offset_image_centre = grid_size*grid_size/2 + grid_size/2;
 	size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
@@ -278,11 +263,11 @@ __global__ void accumulation(float* dirty_pre, cufftComplex* w_grid_stack_shifte
 	if (idx < image_size && idy < image_size) { 
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
-		float pixel_sum = w_grid_stack_shifted[grid_index_offset_image_centre + idy*grid_size + idx].x;
-        	if (((abs(idx)+abs(idy)) & 1) != 0) {
+		float pixel_sum = r_grid_stack_shifted[grid_index_offset_image_centre + idy*grid_size + idx].x;
+		if (((abs(idx)+abs(idy)) & 1) != 0) {
 			pixel_sum = - pixel_sum;
 		}
-		dirty_pre[image_index_offset_image_centre + idy*image_size + idx] += pixel_sum;
+		dirty_pre[image_index_offset_image_centre + idy*image_size + idx] = pixel_sum;
 	}
 }
 
@@ -296,7 +281,7 @@ __global__ void scaling(float* dirty_pre, float* conv_corr_kernel, size_t image_
 		idx = idx - half_image_size;
 		idy = idy - half_image_size;
         
-        	dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
+        dirty_pre[image_index_offset_image_centre + idy * image_size + idx] *= 1/(conv_corr_kernel[abs(idx)]*conv_corr_kernel[abs(idy)]*conv_corr_norm_factor*conv_corr_norm_factor);
 		dirty_pre[image_index_offset_image_centre + idy * image_size + idx] = fabs(dirty_pre[image_index_offset_image_centre + idy * image_size + idx]);
 	}
 }
@@ -570,14 +555,13 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin, 
            float* result_array,
            size_t num_baselines, size_t image_size, size_t num_snapshots,
-           float freq_hz, float cell_size,
-           size_t unit_size){
+           float cell_size, size_t unit_size){
 	float *Vis_real, *Vis_imag, *B_in, *V_in;
 	float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
 	float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
 	float *dirty1, *dirty2, *dirty3;
 	float *dirty_pre, *conv_corr_kernel, *w_grid_stack_real, *w_grid_stack_imag, *pixel_ind, *output_index, *max_tmp, *maxall;
-	cudaError_t cudaStatus,cudaError;
+	cudaError_t cudaStatus, cudaError;
 	cufftComplex *w_grid_stack, *w_grid_stack_shifted;
 	int bid_ind;
 	size_t shared_mem_size;
@@ -691,7 +675,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
 			num_blocks = computeCeil(static_cast<float>(num_baselines)/num_threads);
 			computeVisWeighted<<<num_blocks,num_threads,0,stream1>>>(Vis_real,Vis_imag,num_baselines,V_in);
-			gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, w_grid_stack_real, w_grid_stack_imag, Vis_real, Vis_imag, freq_hz, uv_scale, grid_size, num_baselines);
+			gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, w_grid_stack_real, w_grid_stack_imag, Vis_real, Vis_imag, uv_scale, grid_size, num_baselines);
 			num_blocks = computeCeil(static_cast<float>(grid_size * grid_size)/num_threads);
 			combineToComplex<<<num_blocks,num_threads,0,stream1>>>(w_grid_stack_real, w_grid_stack_imag, w_grid_stack, grid_size);
 			num_threads = 32;
@@ -756,7 +740,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
 	num_blocks = computeCeil(static_cast<float>(num_baselines)/num_threads);
 	computeVisWeighted<<<num_blocks,num_threads,0,stream1>>>(Vis_real,Vis_imag,num_baselines,V_in);
-	gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, w_grid_stack_real, w_grid_stack_imag, Vis_real, Vis_imag, freq_hz, uv_scale, grid_size, num_baselines);
+	gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, w_grid_stack_real, w_grid_stack_imag, Vis_real, Vis_imag, uv_scale, grid_size, num_baselines);
 	num_blocks = computeCeil(static_cast<float>(grid_size * grid_size)/num_threads);
 	combineToComplex<<<num_blocks,num_threads,0,stream1>>>(w_grid_stack_real, w_grid_stack_imag, w_grid_stack, grid_size);
 	num_threads = 32;
