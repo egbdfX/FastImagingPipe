@@ -1,0 +1,8 @@
+[wrap-file]
+directory = cfitsio-cfitsio-4.6.3
+
+source_url = https://github.com/HEASARC/cfitsio/archive/refs/tags/cfitsio-4.6.3.tar.gz
+source_filename = cfitsio-4.6.3.tar.gz
+source_hash = e9f1017e942f4a90d2db8984a7677e9d01a5da877a43ed905b9b5108451a68a0
+
+method = cmake

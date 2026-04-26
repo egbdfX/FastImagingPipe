@@ -55,4 +55,12 @@ MANIFEST
 
 
 # Ignorable files particular to this project
+#  Build output of Makefile
 sharedlibrary_gpu
+
+#  Build directory of Meson
+/build/
+
+#  Meson subprojects stuff
+/subprojects/*
+!/subprojects/*.wrap
