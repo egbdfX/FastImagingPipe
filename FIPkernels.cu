@@ -6,8 +6,29 @@
 #include <device_launch_parameters.h>
 #include <math_constants.h>
 
-#define M_PI 3.14159265358979323846
+
+
+/**
+ * A C/C++ compiler will emit a diagnostic on a redefinion of a macro to something
+ * that isn't effectively the same thing after already having been defined [1].
+ * This includes redefining M_PI to a different number of decimals.
+ *
+ * Unfortunately, certain low-quality operating systems don't define M_PI.
+ * We borrow the CUDA Toolkit's definition of it if it's available.
+ *
+ * [1] https://gcc.gnu.org/onlinedocs/cpp/Undefining-and-Redefining-Macros.html
+ */
+
+#if   !defined(M_PI)
+# if   defined CUDART_PI
+#  define M_PI CUDART_PI
+# else
+#  define M_PI 3.14159265358979323846
+# endif
+#endif
+
 #define WCSTRIG_TOL 1e-10
+
 
 /* The gridding kernels are developed based on SKA SDP (https://gitlab.com/ska-telescope/sdp/ska-sdp-func). */
 
