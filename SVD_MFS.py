@@ -2,11 +2,14 @@ import casacore.tables as tables
 import scipy.io
 import numpy
 from sklearn.decomposition import PCA
-from mat4py import loadmat
-import scipy.io
 from astropy.io import fits
 
 C = 299792458
+
+all_bins = []
+all_vins = []
+all_visreal = []
+all_visimag = []
 
 for ind in range(3):
     vis = tables.table('PSR'+str(ind)+'.ms', readonly = False)
@@ -106,8 +109,12 @@ for ind in range(3):
     Bin[:, 0] = Bin[:, 0] - M1
     Bin[:, 1] = Bin[:, 1] - M2
 
-    fits.writeto('Bin' + str(ind) + '.fits', Bin, overwrite=True)
-    fits.writeto('Min' + str(ind) + '.fits', Min, overwrite=True)
-    fits.writeto('Vin' + str(ind) + '.fits', Vin, overwrite=True)
-    fits.writeto('Visreal' + str(ind) + '.fits', Visreal, overwrite=True)
-    fits.writeto('Visimag' + str(ind) + '.fits', Visimag, overwrite=True)
+    all_bins.append(Bin)
+    all_vins.append(Vin)
+    all_visreal.append(Visreal[:, numpy.newaxis])
+    all_visimag.append(Visimag[:, numpy.newaxis])
+
+fits.writeto('Bin.fits', numpy.vstack(all_bins), overwrite=True)
+fits.writeto('Vin.fits', numpy.vstack(all_vins), overwrite=True)
+fits.writeto('Visreal.fits', numpy.vstack(all_visreal), overwrite=True)
+fits.writeto('Visimag.fits', numpy.vstack(all_visimag), overwrite=True)
