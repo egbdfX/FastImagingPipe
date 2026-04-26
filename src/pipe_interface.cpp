@@ -138,43 +138,39 @@ int write_fits_image(const char* filename, float *image_data, long* naxes) {
 
 int main(int argc, char* argv[]) {
     (void)argc;
-    char input_Visreal[1000];
-    char input_Visimag[1000];
-    char input_Bin[1000];
-    char input_Vin[1000];
-    char output_name[1000];
+    char* input_Visreal  = argv[ 1];
+    char* input_Visimag  = argv[ 2];
+    char* input_Bin      = argv[ 3];
+    char* input_Vin      = argv[ 4];
+    char* output_name    = argv[10];
+
 
     long imasize[2];
-    sprintf(input_Visreal, "%s", argv[1]);
     float *Visreal = read_fits_image(input_Visreal, imasize);
     if (Visreal == NULL) {
         return 1;
     }
 
-    sprintf(input_Visimag, "%s", argv[2]);
     float *Visimag = read_fits_image(input_Visimag, imasize);
     if (Visimag == NULL) {
         return 1;
     }
 
-    sprintf(input_Bin, "%s", argv[3]);
-    float *Bin = read_fits_image(input_Bin, imasize);
+    float *Bin     = read_fits_image(input_Bin,     imasize);
     if (Bin == NULL) {
         return 1;
     }
 
-    sprintf(input_Vin, "%s", argv[4]);
-    float *Vin = read_fits_image(input_Vin, imasize);
+    float *Vin     = read_fits_image(input_Vin,     imasize);
     if (Vin == NULL) {
         return 1;
     }
 
-    size_t image_size = std::stoul(argv[5]);
+    size_t image_size    = std::stoul(argv[5]);
     size_t num_baselines = std::stoul(argv[6]);
-    float cell_size = std::stof(argv[7]);
+    float cell_size      = std::stof (argv[7]);
     size_t num_snapshots = std::stoul(argv[8]);
-    size_t unit_size = std::stoul(argv[9]);
-    sprintf(output_name, "%s", argv[10]);
+    size_t unit_size     = std::stoul(argv[9]);
 
     size_t unit_num = image_size/unit_size;
     float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
