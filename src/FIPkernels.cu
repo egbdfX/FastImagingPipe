@@ -397,7 +397,7 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
 	size_t half_image_size = image_size / 2;
 	size_t image_index_offset_image_centre = static_cast<long int>(half_image_size*image_size + half_image_size);
-    
+
 	if (idx < image_size && idy < image_size) {
 		float LL = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+0] - static_cast<float>(half_image_size);
 		float MM = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+1] - static_cast<float>(half_image_size);
