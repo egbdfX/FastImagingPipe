@@ -392,12 +392,12 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 	}
 }
 
-__global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty, size_t image_size) {
+__global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty, size_t image_size, size_t num_baselines) {
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
 	size_t half_image_size = image_size / 2;
 	size_t image_index_offset_image_centre = static_cast<long int>(half_image_size*image_size + half_image_size);
-
+    
 	if (idx < image_size && idy < image_size) {
 		float LL = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+0] - static_cast<float>(half_image_size);
 		float MM = output_index[(static_cast<size_t>(idx)*image_size+static_cast<size_t>(idy))*2+1] - static_cast<float>(half_image_size);
@@ -405,26 +405,25 @@ __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty,
 		idx = idx - static_cast<long int>(half_image_size);
 		idy = idy - static_cast<long int>(half_image_size);
 		
+		const float inv_num_baselines = 1.0f / static_cast<float>(num_baselines);
+        const float value = dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx] * inv_num_baselines;
+		
 		if (fabs(LL) < half_image_size-1 && fabs(MM)<half_image_size-1) {
 			atomicAdd(
 				&dirty[image_index_offset_image_centre+floor_device(MM)*static_cast<long int>(image_size)+floor_device(LL)],
-				(1-LL+floor_device(LL))*(1-MM+floor_device(MM))*
-					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
+				(1-LL+floor_device(LL))*(1-MM+floor_device(MM))*value
 			);
 			atomicAdd(
 				&dirty[image_index_offset_image_centre+ceil_device(MM)*static_cast<long int>(image_size)+floor_device(LL)],
-				(1-LL+floor_device(LL))*(MM-floor_device(MM))*
-					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
+				(1-LL+floor_device(LL))*(MM-floor_device(MM))*value
 			);
 			atomicAdd(
 				&dirty[image_index_offset_image_centre+floor_device(MM)*static_cast<long int>(image_size)+ceil_device(LL)],
-				(LL-floor_device(LL))*(1-MM+floor_device(MM))*
-					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
+				(LL-floor_device(LL))*(1-MM+floor_device(MM))*value
 			);
 			atomicAdd(
 				&dirty[image_index_offset_image_centre+ceil_device(MM)*static_cast<long int>(image_size)+ceil_device(LL)],
-				(LL-floor_device(LL))*(MM-floor_device(MM))*
-					dirty_pre[image_index_offset_image_centre+idy*static_cast<long int>(image_size)+idx]
+				(LL-floor_device(LL))*(MM-floor_device(MM))*value
 			);
 		}
 	}
@@ -708,7 +707,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			cudaEventRecord(eventstream[ind-1],stream2);
 			cudaStreamWaitEvent(stream1,eventstream[ind-1],0);
 			if (ind == 1) {
-				finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty1, image_size);
+				finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty1, image_size, num_baselines);
 				num_threads = 1024;
 				num_blocks = region_num*region_num;
 				shared_mem_size = num_threads * sizeof(float);
@@ -718,7 +717,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 				max_small<<<num_blocks,num_threads,shared_mem_size,stream1>>>(max_tmp, maxall, image_size, bid_ind);
 			}
 			if (ind == 2) {
-				finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty2, image_size);
+				finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty2, image_size, num_baselines);
 				num_threads = 1024;
 				num_blocks = region_num*region_num;
 				shared_mem_size = num_threads * sizeof(float);
@@ -769,7 +768,7 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 
 	cudaEventRecord(eventstream[2],stream2);
 	cudaStreamWaitEvent(stream1,eventstream[2],0);
-	finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty3, image_size);
+	finalinterp<<<numBlocks,numThreads,0,stream1>>>(output_index, dirty_pre, dirty3, image_size, num_baselines);
 	num_threads = 1024;
 	num_blocks = region_num*region_num;
 	shared_mem_size = num_threads * sizeof(float);
