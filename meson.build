@@ -36,6 +36,10 @@ cufft   = dependency('cuda',    modules: ['cufft']+cudart,   required: true)
 cfitsio = dependency('cfitsio',                              required: false,
                      fallback: ['cfitsio', 'cfitsio_dep'],
                      default_options: ['warning_level=0'])
+popt    = dependency('popt',                                 required: true,
+                     fallback: ['popt',    'popt_dep'],
+                     default_options: ['c_std=gnu99,c99',
+                                       'warning_level=0'])
 
 
 

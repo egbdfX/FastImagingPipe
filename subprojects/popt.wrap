@@ -1,0 +1,9 @@
+[wrap-git]
+#
+# The popt library changes very rarely these days.
+# Current HEAD is 8631d608e507385da472b4119e980982ce281af0
+# Current self-declared version at HEAD is 1.19
+#
+url      = https://github.com/rpm-software-management/popt.git
+revision = HEAD
+method   = cmake
