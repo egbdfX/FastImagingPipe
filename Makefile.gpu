@@ -1,7 +1,7 @@
 CUDA_HOME ?= /usr/local/cuda
 
 CFITSIO_HOME := $(HOME)/Libraries/cfitsio
-CASACORE_HOME ?= /network/scratch/b/bilaniuo/rootfs/usr
+CASACORE_HOME ?= /usr
 
 INC := -I$(CUDA_HOME)/include -I$(CFITSIO_HOME)/include -I$(CASACORE_HOME)/include -I.
 
