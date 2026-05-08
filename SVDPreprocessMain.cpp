@@ -25,6 +25,58 @@ std::size_t flattened_index(std::size_t row, std::size_t chan, std::size_t num_r
     return row + chan * num_rows;
 }
 
+struct RowAxisLayout {
+    int channel_axis = 0;
+    int pol_axis = 1;
+    std::size_t num_channels = 0;
+    std::size_t num_pols = 0;
+};
+
+RowAxisLayout detect_row_axis_layout(const casacore::IPosition& shape) {
+    if (shape.nelements() != 2) {
+        throw std::runtime_error("Expected a 2D row shape");
+    }
+
+    RowAxisLayout layout;
+    const std::size_t dim0 = static_cast<std::size_t>(shape[0]);
+    const std::size_t dim1 = static_cast<std::size_t>(shape[1]);
+
+    if (dim1 == 4 || dim1 == 2 || dim1 == 1) {
+        layout.channel_axis = 0;
+        layout.pol_axis = 1;
+        layout.num_channels = dim0;
+        layout.num_pols = dim1;
+        return layout;
+    }
+    if (dim0 == 4 || dim0 == 2 || dim0 == 1) {
+        layout.channel_axis = 1;
+        layout.pol_axis = 0;
+        layout.num_channels = dim1;
+        layout.num_pols = dim0;
+        return layout;
+    }
+
+    if (dim0 >= dim1) {
+        layout.channel_axis = 0;
+        layout.pol_axis = 1;
+        layout.num_channels = dim0;
+        layout.num_pols = dim1;
+    } else {
+        layout.channel_axis = 1;
+        layout.pol_axis = 0;
+        layout.num_channels = dim1;
+        layout.num_pols = dim0;
+    }
+    return layout;
+}
+
+casacore::IPosition make_row_index(const RowAxisLayout& layout, std::size_t chan, std::size_t pol) {
+    casacore::IPosition index(2, 0, 0);
+    index[layout.channel_axis] = static_cast<int>(chan);
+    index[layout.pol_axis] = static_cast<int>(pol);
+    return index;
+}
+
 void check_fits_status(int status, const std::string& context) {
     if (status != 0) {
         fits_report_error(stderr, status);
@@ -165,34 +217,30 @@ HostMeasurementSetData read_measurement_set(const std::string& ms_path) {
             throw std::runtime_error("DATA row does not have 2 dimensions in " + ms_path);
         }
 
-        const std::size_t num_channels = static_cast<std::size_t>(data_shape[0]);
-        const std::size_t num_pols = static_cast<std::size_t>(data_shape[1]);
-        if (num_channels != result.num_channels) {
-            throw std::runtime_error("DATA channel count does not match CHAN_FREQ in " + ms_path);
-        }
-        if (num_pols < 4) {
+        const RowAxisLayout row_layout = detect_row_axis_layout(data_shape);
+        if (row_layout.num_pols < 4) {
             throw std::runtime_error("DATA row has fewer than 4 polarizations in " + ms_path);
         }
 
         Array<float> weight_row;
         if (has_weight_spectrum) {
             weight_col->get(static_cast<casacore::rownr_t>(row), weight_row);
-            const auto weight_shape = weight_row.shape();
-            if (weight_shape.nelements() != 2 ||
-                static_cast<std::size_t>(weight_shape[0]) != result.num_channels ||
-                static_cast<std::size_t>(weight_shape[1]) < 4) {
-                throw std::runtime_error("WEIGHT_SPECTRUM shape mismatch in " + ms_path);
-            }
         }
 
         result.uvw[row * 3 + 0] = static_cast<float>(uvw_row[0]);
         result.uvw[row * 3 + 1] = static_cast<float>(uvw_row[1]);
         result.uvw[row * 3 + 2] = static_cast<float>(uvw_row[2]);
 
+        const std::size_t vis_channels = row_layout.num_channels;
+        if (vis_channels == 0) {
+            throw std::runtime_error("DATA row has zero channels in " + ms_path);
+        }
+
         for (std::size_t chan = 0; chan < result.num_channels; ++chan) {
             const std::size_t dst_idx = flattened_index(row, chan, result.num_rows);
-            const casacore::IPosition pol0_index(2, static_cast<int>(chan), 0);
-            const casacore::IPosition pol3_index(2, static_cast<int>(chan), 3);
+            const std::size_t chan_in_row = chan % vis_channels;
+            const casacore::IPosition pol0_index = make_row_index(row_layout, chan_in_row, 0);
+            const casacore::IPosition pol3_index = make_row_index(row_layout, chan_in_row, 3);
             const Complex vis0_value = data_row(pol0_index);
             const Complex vis3_value = data_row(pol3_index);
 

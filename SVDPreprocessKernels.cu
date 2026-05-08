@@ -164,6 +164,47 @@ __global__ void project_bin_kernel(
         x2 * basis_row_major[1 * 3 + 2];
 }
 
+__global__ void align_pca_signs_kernel(
+    float* basis_row_major,
+    float* vin_row_major,
+    float* bin_row_major,
+    std::size_t num_samples
+) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        for (int component = 0; component < 2; ++component) {
+            int max_axis = 0;
+            float max_value = fabsf(basis_row_major[component * 3 + 0]);
+            for (int axis = 1; axis < 3; ++axis) {
+                const float candidate = fabsf(basis_row_major[component * 3 + axis]);
+                if (candidate > max_value) {
+                    max_value = candidate;
+                    max_axis = axis;
+                }
+            }
+
+            if (basis_row_major[component * 3 + max_axis] < 0.0f) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    basis_row_major[component * 3 + axis] = -basis_row_major[component * 3 + axis];
+                    vin_row_major[component * 3 + axis] = -vin_row_major[component * 3 + axis];
+                }
+                for (std::size_t sample = 0; sample < num_samples; ++sample) {
+                    bin_row_major[sample * 2 + component] = -bin_row_major[sample * 2 + component];
+                }
+            }
+        }
+
+        vin_row_major[2 * 3 + 0] =
+            vin_row_major[0 * 3 + 1] * vin_row_major[1 * 3 + 2] -
+            vin_row_major[0 * 3 + 2] * vin_row_major[1 * 3 + 1];
+        vin_row_major[2 * 3 + 1] =
+            vin_row_major[0 * 3 + 2] * vin_row_major[1 * 3 + 0] -
+            vin_row_major[0 * 3 + 0] * vin_row_major[1 * 3 + 2];
+        vin_row_major[2 * 3 + 2] =
+            vin_row_major[0 * 3 + 0] * vin_row_major[1 * 3 + 1] -
+            vin_row_major[0 * 3 + 1] * vin_row_major[1 * 3 + 0];
+    }
+}
+
 __global__ void collapse_visibility_kernel(
     const float* vis0_real,
     const float* vis0_imag,
@@ -351,6 +392,14 @@ void preprocess_measurement_set_gpu(
         project_bin_kernel<<<blocks, threads>>>(
             d_baselines,
             d_basis,
+            device_buffers.d_bin,
+            num_samples
+        );
+        CHECK_CUDA(cudaGetLastError());
+
+        align_pca_signs_kernel<<<1, 1>>>(
+            d_basis,
+            device_buffers.d_vin,
             device_buffers.d_bin,
             num_samples
         );
