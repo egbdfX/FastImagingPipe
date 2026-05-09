@@ -209,17 +209,17 @@ HostMeasurementSetData read_measurement_set(const std::string& ms_path) {
         flag_col.get(static_cast<casacore::rownr_t>(row), flag_row);
 
         if (uvw_row.size() != 3) {
-            throw std::runtime_error("UVW row does not have 3 entries in " + ms_path);
+            throw std::runtime_error("UVW does not have 3 entries in " + ms_path);
         }
 
         const auto data_shape = data_row.shape();
         if (data_shape.nelements() != 2) {
-            throw std::runtime_error("DATA row does not have 2 dimensions in " + ms_path);
+            throw std::runtime_error("DATA does not have 2 dimensions in " + ms_path);
         }
 
         const RowAxisLayout row_layout = detect_row_axis_layout(data_shape);
         if (row_layout.num_pols < 4) {
-            throw std::runtime_error("DATA row has fewer than 4 polarizations in " + ms_path);
+            throw std::runtime_error("DATA has fewer than 4 polarisations in " + ms_path);
         }
 
         Array<float> weight_row;
@@ -233,7 +233,7 @@ HostMeasurementSetData read_measurement_set(const std::string& ms_path) {
 
         const std::size_t vis_channels = row_layout.num_channels;
         if (vis_channels == 0) {
-            throw std::runtime_error("DATA row has zero channels in " + ms_path);
+            throw std::runtime_error("DATA has zero channels in " + ms_path);
         }
 
         for (std::size_t chan = 0; chan < result.num_channels; ++chan) {
