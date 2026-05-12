@@ -1,13 +1,14 @@
+/* Includes */
 #include <stdio.h>
 #include <stdlib.h>
-#include "fitsio.h"
-#include <vector>
-#include <iostream>
-#include <chrono>
+#include <string.h>
+#include <errno.h>
+
+#include <cfitsio/fitsio.h>
 
 #include "utils.h"
 
-using namespace std;
+
 
 float* read_fits_image(const char* filename, long* naxes) {
     fitsfile *fptr;
@@ -53,7 +54,7 @@ float* read_fits_image(const char* filename, long* naxes) {
             return NULL;
         }
         total_elements = naxes[0] * naxes[1];
-        printf("DEBUG: 2D array, naxes[0]=%ld, naxes[1]=%ld, total_elements=%ld\n", 
+        printf("DEBUG: 2D array, naxes[0]=%ld, naxes[1]=%ld, total_elements=%ld\n",
                naxes[0], naxes[1], total_elements);
     } else {
         fprintf(stderr, "ERROR: Unsupported naxis=%d for file %s\n", naxis, filename);
@@ -64,13 +65,13 @@ float* read_fits_image(const char* filename, long* naxes) {
     // Allocate based on actual total elements
     float *image_data = (float *)malloc(total_elements * sizeof(float));
     if (image_data == NULL) {
-        fprintf(stderr, "ERROR: Memory allocation failed for %ld elements (%.2f MB)\n", 
+        fprintf(stderr, "ERROR: Memory allocation failed for %ld elements (%.2f MB)\n",
                 total_elements, (total_elements * sizeof(float)) / (1024.0 * 1024.0));
         fits_close_file(fptr, &status);
         return NULL;
     }
 
-    printf("DEBUG: Allocated %.2f MB for %ld elements\n", 
+    printf("DEBUG: Allocated %.2f MB for %ld elements\n",
            (total_elements * sizeof(float)) / (1024.0 * 1024.0), total_elements);
 
     // Read the actual number of elements
@@ -82,7 +83,7 @@ float* read_fits_image(const char* filename, long* naxes) {
         return NULL;
     }
 
-    printf("DEBUG: Successfully read %ld elements, first value=%.6e, last value=%.6e\n", 
+    printf("DEBUG: Successfully read %ld elements, first value=%.6e, last value=%.6e\n",
            total_elements, image_data[0], image_data[total_elements-1]);
 
     fits_close_file(fptr, &status);
@@ -134,53 +135,4 @@ int write_fits_image(const char* filename, float *image_data, long* naxes) {
     }
 
     return 0;
-}
-
-int main(int argc, char* argv[]) {
-    (void)argc;
-    char* input_Visreal  = argv[ 1];
-    char* input_Visimag  = argv[ 2];
-    char* input_Bin      = argv[ 3];
-    char* input_Vin      = argv[ 4];
-    char* output_name    = argv[10];
-
-
-    long imasize[2];
-    float *Visreal = read_fits_image(input_Visreal, imasize);
-    if (Visreal == NULL) {
-        return 1;
-    }
-
-    float *Visimag = read_fits_image(input_Visimag, imasize);
-    if (Visimag == NULL) {
-        return 1;
-    }
-
-    float *Bin     = read_fits_image(input_Bin,     imasize);
-    if (Bin == NULL) {
-        return 1;
-    }
-
-    float *Vin     = read_fits_image(input_Vin,     imasize);
-    if (Vin == NULL) {
-        return 1;
-    }
-
-    size_t image_size    = std::stoul(argv[5]);
-    size_t num_baselines = std::stoul(argv[6]);
-    float cell_size      = std::stof (argv[7]);
-    size_t num_snapshots = std::stoul(argv[8]);
-    size_t unit_size     = std::stoul(argv[9]);
-
-    size_t unit_num = image_size/unit_size;
-    float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
-
-    FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
-
-    long naxes[2] = {long(unit_size), long(unit_size)};
-    int status = write_fits_image(output_name, result_array, naxes);
-    if (status) {
-        fprintf(stderr, "Error writing FITS image\n");
-        return 1;
-    }
 }

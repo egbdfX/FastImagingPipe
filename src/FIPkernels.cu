@@ -6,6 +6,7 @@
 #include <device_launch_parameters.h>
 #include <math_constants.h>
 
+#include "utils.h"
 
 
 /**
