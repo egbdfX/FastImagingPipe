@@ -915,19 +915,70 @@ int FIpipe2(float* Visreal,
     float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
     float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *pixel_ind, *output_index, *max_tmp, *maxall;
-    cudaError_t cudaError;
-    cufftComplex *r_grid_stack;
-    int bid_ind;
-    size_t shared_mem_size;
-    size_t num_blocks;
-    const size_t num_threads = 1024;
+
+    float* d_data_1;
+    float* d_data_2;
+    float* diff_out;
+    float* result_data;
+
+    float  milliseconds=0, milliseconds1=0;
+
+    const size_t unit_num    = image_size/unit_size;
     const size_t region_num  = 32;
     const size_t region_size = ceiling_divide(image_size, region_num);
+    const size_t grid_size   = ceiling_divide(image_size*3,        2); // * 1.5, rounding up
 
+    const float r1r2_scale   = cell_size*grid_size;
+    const float conv_corr_norm_factor = 2.4937047051153827;
+    const float C            = 1e-6;
+
+
+    /**
+     * There are at least six typical launch configurations:
+     *
+     *   NAME            #THRD  #BLOCK                             SHMEM
+     *   "s" (Square):   32x32, ~image_size/32 x ~image_size/32
+     *   "k" (Convolve): 1024,  ~(image_size/2+1)/1024
+     *   "g" (Gridding): 1024,  ~num_baselines/1024
+     *   "c" (Combine):  1024,  ~grid_size*grid_size/1024
+     *   "r" (Region):   1024,   region_num*region_num,            1024 floats
+     *   "f" (Final):    1024,  ~image_size*image_size
+     *   "t" (TLISI):    1024,   unit_num*unit_num                 3*1024 floats
+     *
+     * Abbreviate them and centralize their calculations here.
+     */
+
+    dim3 Ts = {32, 32}, Bs = {
+        (unsigned)ceiling_divide(image_size, Ts.x),
+        (unsigned)ceiling_divide(image_size, Ts.y),
+    };
+    dim3 Tk = {1024},   Bk = {
+        (unsigned)ceiling_divide(image_size/2+1, Tk.x)
+    };
+    dim3 Tg = {1024},   Bg = {
+        (unsigned)ceiling_divide(num_baselines,  Tg.x)
+    };
+    dim3 Tc = {1024},   Bc = {
+        (unsigned)ceiling_divide(grid_size*grid_size, Tc.x)
+    };
+    dim3 Tr = {1024},   Br = {region_num*region_num};
+    dim3 Tf = {1024},   Bf = {
+        (unsigned)ceiling_divide(image_size*image_size, Tf.x),
+    };
+    dim3 Tt = {1024},   Bt = {(unsigned)(unit_num*unit_num)};
+
+    size_t Sr =     Tr.x * sizeof(float);
+    size_t St = 3 * Tt.x * sizeof(float);
+
+
+    /* Assorted CUDA objects that will be needed */
+    cudaError_t cudaError;
+    cufftComplex *r_grid_stack;
     cudaStream_t stream1, stream2, stream3;
     cufftHandle plan;
-
     cudaEvent_t start, stop, eventstream[3], events[3], events_kernel[3];
+    cudaEvent_t start1, stop1;
+
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventCreate(&eventstream[0]);
@@ -939,10 +990,6 @@ int FIpipe2(float* Visreal,
     cudaEventCreate(&events_kernel[0]);
     cudaEventCreate(&events_kernel[1]);
     cudaEventCreate(&events_kernel[2]);
-
-    size_t grid_size = image_size + (image_size/2) + (image_size&1); // * 1.5, rounding up
-    float r1r2_scale = cell_size*grid_size;
-    float conv_corr_norm_factor = 2.4937047051153827;
 
     cudaMalloc((void**)&dirty1,              image_size * image_size * sizeof(float));
     cudaMalloc((void**)&dirty2,              image_size * image_size * sizeof(float));
@@ -994,11 +1041,6 @@ int FIpipe2(float* Visreal,
     cufftSetStream(plan, stream1);
     cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
 
-    dim3 numThreads = {32, 32};
-    dim3 numBlocks  = {
-        (unsigned)ceiling_divide(image_size, numThreads.x),
-        (unsigned)ceiling_divide(image_size, numThreads.y),
-    };
 
     cudaEventRecord(start);
     /* ****************************************************** */
@@ -1024,31 +1066,24 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-            num_blocks = ceiling_divide(image_size/2+1,      num_threads);
-            convolveKernel     <<<num_blocks, num_threads, 0, stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
-            num_blocks = ceiling_divide(num_baselines,       num_threads);
-            computeVisWeighted <<<num_blocks, num_threads, 0, stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
-            gridding           <<<num_blocks, num_threads, 0, stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
-            num_blocks = ceiling_divide(grid_size*grid_size, num_threads);
-            combineToComplex   <<<num_blocks, num_threads, 0, stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+            convolveKernel     <<<Bk, Tk, 0,  stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
+            computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+            gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+            combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
-            accumulation       <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, r_grid_stack, image_size, grid_size);
-            scaling            <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
-            coordschange       <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, image_size);
-            p2p                <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, cell_size, image_size);
+            accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
+            scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
+            coordschange       <<<Bs, Ts, 0,  stream2>>> (output_index, V_in,            image_size);
+            p2p                <<<Bs, Ts, 0,  stream2>>> (output_index, V_in, cell_size, image_size);
 
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
 
             if(ind == 1 || ind == 2){
                 dirtyp = ind == 1 ? dirty1 : dirty2;
-                finalinterp    <<<numBlocks,  numThreads,  0, stream1>>> (output_index, dirty_pre, dirtyp, image_size, num_baselines);
-                num_blocks = region_num*region_num;
-                shared_mem_size = num_threads * sizeof(float);
-                max_large      <<<num_blocks, num_threads, shared_mem_size, stream1>>> (dirtyp, max_tmp, region_num, region_size, image_size);
-                num_blocks = 1;
-                bid_ind = ind - 1;
-                max_small      <<<num_blocks, num_threads, shared_mem_size, stream1>>> (max_tmp, maxall, image_size, bid_ind);
+                finalinterp    <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirtyp, image_size, num_baselines);
+                max_large      <<<Br, Tr, Sr, stream1>>> (dirtyp, max_tmp, region_num, region_size, image_size);
+                max_small      <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, /* bid_ind= */ ind-1);
             }
 
             cudaEventRecord(events_kernel[ind],stream1);
@@ -1070,37 +1105,29 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-    num_blocks = ceiling_divide(image_size/2+1,      num_threads);
-    convolveKernel     <<<num_blocks, num_threads, 0, stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
-    num_blocks = ceiling_divide(num_baselines,       num_threads);
-    computeVisWeighted <<<num_blocks, num_threads, 0, stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
-    gridding           <<<num_blocks, num_threads, 0, stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
-    num_blocks = ceiling_divide(grid_size*grid_size, num_threads);
-    combineToComplex   <<<num_blocks, num_threads, 0, stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+    convolveKernel     <<<Bk, Tk, 0,  stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
+    computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+    gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+    combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
-    accumulation       <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, r_grid_stack, image_size, grid_size);
-    scaling            <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
-    coordschange       <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, image_size);
-    p2p                <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, cell_size, image_size);
+    accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
+    scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
+    coordschange       <<<Bs, Ts, 0,  stream2>>> (output_index, V_in,            image_size);
+    p2p                <<<Bs, Ts, 0,  stream2>>> (output_index, V_in, cell_size, image_size);
 
-    cudaEventRecord(eventstream[2],stream2);
-    cudaStreamWaitEvent(stream1,eventstream[2],0);
-    finalinterp        <<<numBlocks,  numThreads,  0, stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
-    num_blocks = region_num*region_num;
-    shared_mem_size = num_threads * sizeof(float);
-    max_large          <<<num_blocks, num_threads, shared_mem_size, stream1>>> (dirty3, max_tmp, region_num, region_size, image_size);
-    num_blocks = 1;
-    bid_ind = 2;
-    max_small          <<<num_blocks, num_threads, shared_mem_size, stream1>>> (max_tmp, maxall, image_size, bid_ind);
+    cudaEventRecord    (eventstream[2], stream2);
+    cudaStreamWaitEvent(stream1, eventstream[2], 0);
+    finalinterp        <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
+    max_large          <<<Br, Tr, Sr, stream1>>> (dirty3, max_tmp, region_num, region_size, image_size);
+    max_small          <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, /* bid_ind= */ 2);
 
     cudaStreamSynchronize(stream1);
 
     /* ****************************************************** */
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
-    std::cout << "Time elapsed: " << milliseconds << " ms" << std::endl;
+    printf("Time elapsed: %9.6f ms\n", (double)milliseconds);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
@@ -1137,14 +1164,6 @@ int FIpipe2(float* Visreal,
     cudaFreeHost(pinned_V_in);
 
     // FI Trigger
-    float* d_data_1;
-    float* d_data_2;
-    float* diff_out;
-    float* result_data;
-    float  C = 1e-6;
-
-    size_t unit_num = image_size/unit_size;
-
     cudaMalloc((void**)&d_data_1,    image_size*image_size*sizeof(float));
     cudaMalloc((void**)&d_data_2,    image_size*image_size*sizeof(float));
     cudaMalloc((void**)&diff_out,    image_size*image_size*sizeof(float));
@@ -1155,28 +1174,21 @@ int FIpipe2(float* Visreal,
     cudaMemset(diff_out,    0, image_size*image_size*sizeof(float));
     cudaMemset(result_data, 0, unit_num  *unit_num  *sizeof(float));
 
-    cudaEvent_t start1, stop1;
     cudaEventCreate(&start1);
     cudaEventCreate(&stop1);
 
     cudaEventRecord(start1);
     /* ****************************************************** */
-    size_t size = image_size * image_size;
-    num_blocks = ceiling_divide(size, num_threads);
-    subtraction       <<<num_blocks, num_threads>>> (dirty1, dirty2, d_data_1, size);
-    subtraction       <<<num_blocks, num_threads>>> (dirty2, dirty3, d_data_2, size);
-    setNonPositiveToC <<<num_blocks, num_threads>>> (dirty2, size, C); // Be careful about this, because when there are a lot of trigger, this may cause trouble (because the image dirty2 has been changed by this).
-    subtraction       <<<num_blocks, num_threads>>> (d_data_1, d_data_2, diff_out, size);
-    num_blocks = unit_num*unit_num;
-    shared_mem_size = 3 * num_threads * sizeof(float);
-    tlisi             <<<num_blocks, num_threads, shared_mem_size>>>(diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+    subtraction       <<<Bf, Tf>>>     (dirty1,   dirty2,   d_data_1, image_size*image_size);
+    subtraction       <<<Bf, Tf>>>     (dirty2,   dirty3,   d_data_2, image_size*image_size);
+    setNonPositiveToC <<<Bf, Tf>>>     (dirty2,                       image_size*image_size, C); // Be careful about this, because when there are a lot of trigger, this may cause trouble (because the image dirty2 has been changed by this).
+    subtraction       <<<Bf, Tf>>>     (d_data_1, d_data_2, diff_out, image_size*image_size);
+    tlisi             <<<Bt, Tt, St>>> (diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
     /* ****************************************************** */
     cudaEventRecord(stop1);
     cudaEventSynchronize(stop1);
-    float milliseconds1 = 0;
     cudaEventElapsedTime(&milliseconds1, start1, stop1);
-    printf("Time elapsed: %f ms\n", milliseconds1);
-
+    printf("Time elapsed: %9.6f ms\n", (double)milliseconds1);
     cudaEventDestroy(start1);
     cudaEventDestroy(stop1);
 
