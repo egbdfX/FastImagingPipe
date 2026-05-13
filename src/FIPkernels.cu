@@ -925,6 +925,7 @@ int FIpipe2(float* Visreal,
 
     float  milliseconds=0, milliseconds1=0;
 
+    const size_t num_events  = num_snapshots>3 ? num_snapshots : 3;
     const size_t unit_num    = image_size/unit_size;
     const size_t region_num  = 32;
     const size_t region_size = ceiling_divide(image_size, region_num);
@@ -938,7 +939,7 @@ int FIpipe2(float* Visreal,
     cufftComplex* r_grid_stack;
     cudaStream_t  stream1, stream2, stream3;
     cufftHandle   plan;
-    cudaEvent_t   start, stop, eventstream[3], events[3], events_kernel[3];
+    cudaEvent_t   start, stop, *eventstream, *events, *events_kernel;
     cudaEvent_t   start1, stop1;
 
 
@@ -1041,15 +1042,14 @@ int FIpipe2(float* Visreal,
     /* CUDA Event creation */
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventCreate(&eventstream[0]);
-    cudaEventCreate(&eventstream[1]);
-    cudaEventCreate(&eventstream[2]);
-    cudaEventCreate(&events[0]);
-    cudaEventCreate(&events[1]);
-    cudaEventCreate(&events[2]);
-    cudaEventCreate(&events_kernel[0]);
-    cudaEventCreate(&events_kernel[1]);
-    cudaEventCreate(&events_kernel[2]);
+    eventstream   = calloc(num_events, sizeof(cudaEvent_t));
+    events        = calloc(num_events, sizeof(cudaEvent_t));
+    events_kernel = calloc(num_events, sizeof(cudaEvent_t));
+    for(size_t i=0; i<num_events; i++){
+        cudaEventCreate(&eventstream[i]);
+        cudaEventCreate(&events[i]);
+        cudaEventCreate(&events_kernel[i]);
+    }
 
 
 
@@ -1139,14 +1139,20 @@ int FIpipe2(float* Visreal,
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Time elapsed: %9.6f ms\n", (double)milliseconds);
+
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-
-    for(int i = 0; i < 3; i++){
+    for(size_t i=0; i<num_events; i++){
         cudaEventDestroy(eventstream[i]);
         cudaEventDestroy(events[i]);
         cudaEventDestroy(events_kernel[i]);
     }
+    free(eventstream);
+    free(events);
+    free(events_kernel);
+    eventstream   = NULL;
+    events        = NULL;
+    events_kernel = NULL;
 
     cudaStreamDestroy(stream1);
     cudaStreamDestroy(stream2);
