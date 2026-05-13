@@ -914,7 +914,9 @@ int FIpipe2(float* Visreal,
     float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
     float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
-    float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *pixel_ind, *output_index, *max_tmp, *maxall;
+    float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *output_index, *max_tmp, *maxall;
+    float* image_buffer;
+    float* Vis_buffer;
 
     float* d_data_1;
     float* d_data_2;
@@ -931,6 +933,13 @@ int FIpipe2(float* Visreal,
     const float r1r2_scale   = cell_size*grid_size;
     const float conv_corr_norm_factor = 2.4937047051153827;
     const float C            = 1e-6;
+
+    cudaError_t   cudaError;
+    cufftComplex* r_grid_stack;
+    cudaStream_t  stream1, stream2, stream3;
+    cufftHandle   plan;
+    cudaEvent_t   start, stop, eventstream[3], events[3], events_kernel[3];
+    cudaEvent_t   start1, stop1;
 
 
     /**
@@ -971,14 +980,65 @@ int FIpipe2(float* Visreal,
     size_t St = 3 * Tt.x * sizeof(float);
 
 
-    /* Assorted CUDA objects that will be needed */
-    cudaError_t cudaError;
-    cufftComplex *r_grid_stack;
-    cudaStream_t stream1, stream2, stream3;
-    cufftHandle plan;
-    cudaEvent_t start, stop, eventstream[3], events[3], events_kernel[3];
-    cudaEvent_t start1, stop1;
+    /* Consolidated memory allocations and initializations. */
+    cudaMalloc((void**)&image_buffer,        6 * image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&r_grid_stack,        4 * grid_size  * grid_size  * sizeof(float));
+    cudaMalloc((void**)&Vis_buffer,          8 * num_baselines * sizeof(float));
 
+    cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)*sizeof(float));
+    cudaMalloc((void**)&max_tmp,             region_num * region_num * sizeof(float));
+    cudaMalloc((void**)&maxall,              3 * sizeof(float));
+    cudaMalloc((void**)&V_intmp,             3 * 3 * sizeof(float));
+    cudaMalloc((void**)&V_in,                3 * 3 * sizeof(float));
+
+    cudaMallocHost((void**)&pinned_Vis_real, num_baselines *     num_snapshots * sizeof(float));
+    cudaMallocHost((void**)&pinned_Vis_imag, num_baselines *     num_snapshots * sizeof(float));
+    cudaMallocHost((void**)&pinned_B_in,     num_baselines * 2 * num_snapshots * sizeof(float));
+    cudaMallocHost((void**)&pinned_V_in,                 3 * 3 * num_snapshots * sizeof(float));
+    memcpy(pinned_Vis_real, Visreal,         num_baselines *     num_snapshots * sizeof(float));
+    memcpy(pinned_Vis_imag, Visimag,         num_baselines *     num_snapshots * sizeof(float));
+    memcpy(pinned_B_in,     Bin,             num_baselines * 2 * num_snapshots * sizeof(float));
+    memcpy(pinned_V_in,     Vin,                         3 * 3 * num_snapshots * sizeof(float));
+
+    cudaMemset(image_buffer,  0,  6*image_size*image_size * sizeof(float));
+    dirty_pre    = image_buffer + 0*image_size*image_size;
+    dirty1       = image_buffer + 1*image_size*image_size;
+    dirty2       = image_buffer + 2*image_size*image_size;
+    dirty3       = image_buffer + 3*image_size*image_size;
+    output_index = image_buffer + 4*image_size*image_size;
+
+    r_grid_stack_real = (float*)r_grid_stack + 2*grid_size*grid_size;
+    r_grid_stack_imag = (float*)r_grid_stack + 3*grid_size*grid_size;
+
+    Vis_realtmp  = Vis_buffer + 0*num_baselines;
+    Vis_imagtmp  = Vis_buffer + 1*num_baselines;
+    B_intmp      = Vis_buffer + 2*num_baselines;
+    Vis_real     = Vis_buffer + 4*num_baselines;
+    Vis_imag     = Vis_buffer + 5*num_baselines;
+    B_in         = Vis_buffer + 6*num_baselines;
+
+    cudaError = cudaGetLastError();
+    if(cudaError != cudaSuccess){
+        printf("ERROR! GPU Kernel 1 error.\n");
+        printf("CUDA error code: %d; string: %s;\n", (int)cudaError, cudaGetErrorString(cudaError));
+    }else{
+        printf("No CUDA error 1.\n");
+    }
+
+
+    /* CUDA Stream creations */
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+
+
+    /* cuFFT init */
+    cufftCreate(&plan);
+    cufftSetStream(plan, stream1);
+    cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
+
+
+    /* CUDA Event creation */
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventCreate(&eventstream[0]);
@@ -991,55 +1051,6 @@ int FIpipe2(float* Visreal,
     cudaEventCreate(&events_kernel[1]);
     cudaEventCreate(&events_kernel[2]);
 
-    cudaMalloc((void**)&dirty1,              image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&dirty2,              image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&dirty3,              image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&dirty_pre,           image_size * image_size * sizeof(float));
-    cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)*sizeof(float));
-    cudaMalloc((void**)&r_grid_stack_real,   grid_size  * grid_size  * sizeof(float));
-    cudaMalloc((void**)&r_grid_stack_imag,   grid_size  * grid_size  * sizeof(float));
-    cudaMalloc((void**)&r_grid_stack,        grid_size  * grid_size  * sizeof(cufftComplex));
-    cudaMalloc((void**)&output_index,        image_size * image_size * 2 * sizeof(float));
-    cudaMalloc((void**)&pixel_ind,           image_size * image_size * 2 * sizeof(float));
-    cudaMalloc((void**)&max_tmp,             region_num * region_num * sizeof(float));
-    cudaMalloc((void**)&maxall,              3 * sizeof(float));
-    cudaMalloc((void**)&Vis_realtmp,         num_baselines * 1 * sizeof(float));
-    cudaMalloc((void**)&Vis_imagtmp,         num_baselines * 1 * sizeof(float));
-    cudaMalloc((void**)&B_intmp,             num_baselines * 2 * sizeof(float));
-    cudaMalloc((void**)&V_intmp,             3 * 3 * sizeof(float));
-    cudaMalloc((void**)&Vis_real,            num_baselines * 1 * sizeof(float));
-    cudaMalloc((void**)&Vis_imag,            num_baselines * 1 * sizeof(float));
-    cudaMalloc((void**)&B_in,                num_baselines * 2 * sizeof(float));
-    cudaMalloc((void**)&V_in,                3 * 3 * sizeof(float));
-
-    cudaMallocHost((void**)&pinned_Vis_real, num_baselines*num_snapshots*sizeof(float));
-    cudaMallocHost((void**)&pinned_Vis_imag, num_baselines*num_snapshots*sizeof(float));
-    cudaMallocHost((void**)&pinned_B_in,     num_baselines*2*num_snapshots*sizeof(float));
-    cudaMallocHost((void**)&pinned_V_in,     3*3*num_snapshots*sizeof(float));
-    memcpy(pinned_Vis_real, Visreal,         num_baselines*num_snapshots*sizeof(float));
-    memcpy(pinned_Vis_imag, Visimag,         num_baselines*num_snapshots*sizeof(float));
-    memcpy(pinned_B_in,     Bin,             num_baselines*2*num_snapshots*sizeof(float));
-    memcpy(pinned_V_in,     Vin,             3*3*num_snapshots*sizeof(float));
-
-    cudaMemset(dirty1, 0, image_size * image_size * sizeof(float));
-    cudaMemset(dirty2, 0, image_size * image_size * sizeof(float));
-    cudaMemset(dirty3, 0, image_size * image_size * sizeof(float));
-
-    cudaError = cudaGetLastError();
-    if(cudaError != cudaSuccess){
-        printf("ERROR! GPU Kernel 1 error.\n");
-        printf("CUDA error code: %d; string: %s;\n", (int)cudaError, cudaGetErrorString(cudaError));
-    }else{
-        printf("No CUDA error 1.\n");
-    }
-
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
-    cudaStreamCreate(&stream3);
-
-    cufftCreate(&plan);
-    cufftSetStream(plan, stream1);
-    cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
 
 
     cudaEventRecord(start);
@@ -1141,27 +1152,18 @@ int FIpipe2(float* Visreal,
     cudaStreamDestroy(stream2);
     cudaStreamDestroy(stream3);
 
-    cudaFree(dirty_pre);
-    cudaFree(conv_corr_kernel);
-    cudaFree(r_grid_stack_real);
-    cudaFree(r_grid_stack_imag);
     cudaFree(r_grid_stack);
-    cudaFree(output_index);
-    cudaFree(pixel_ind);
+    cudaFree(Vis_buffer);
+    cudaFree(conv_corr_kernel);
     cudaFree(max_tmp);
-    cudaFree(Vis_realtmp);
-    cudaFree(Vis_imagtmp);
-    cudaFree(B_intmp);
     cudaFree(V_intmp);
-    cudaFree(Vis_real);
-    cudaFree(Vis_imag);
-    cudaFree(B_in);
     cudaFree(V_in);
 
     cudaFreeHost(pinned_Vis_real);
     cudaFreeHost(pinned_Vis_imag);
     cudaFreeHost(pinned_B_in);
     cudaFreeHost(pinned_V_in);
+
 
     // FI Trigger
     cudaMalloc((void**)&d_data_1,    image_size*image_size*sizeof(float));
@@ -1194,13 +1196,13 @@ int FIpipe2(float* Visreal,
 
     cudaMemcpy(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost);
 
+    cudaFree(image_buffer);
+    cudaFree(maxall);
+
     cudaFree(d_data_1);
     cudaFree(d_data_2);
     cudaFree(diff_out);
     cudaFree(result_data);
-    cudaFree(dirty1);
-    cudaFree(dirty2);
-    cudaFree(dirty3);
 
     return 0;
 }
