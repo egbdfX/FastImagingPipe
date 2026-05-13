@@ -923,6 +923,7 @@ int FIpipe2(float* Visreal,
     float* diff_out;
     float* result_data;
 
+    size_t i, ind;
     float  milliseconds=0, milliseconds1=0;
 
     const size_t num_events  = num_snapshots>3 ? num_snapshots : 3;
@@ -1042,10 +1043,10 @@ int FIpipe2(float* Visreal,
     /* CUDA Event creation */
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    eventstream   = calloc(num_events, sizeof(cudaEvent_t));
-    events        = calloc(num_events, sizeof(cudaEvent_t));
-    events_kernel = calloc(num_events, sizeof(cudaEvent_t));
-    for(size_t i=0; i<num_events; i++){
+    eventstream   = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    events        = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    events_kernel = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    for(i=0; i<num_events; i++){
         cudaEventCreate(&eventstream[i]);
         cudaEventCreate(&events[i]);
         cudaEventCreate(&events_kernel[i]);
@@ -1055,11 +1056,11 @@ int FIpipe2(float* Visreal,
 
     cudaEventRecord(start);
     /* ****************************************************** */
-    for(int ind = 0; ind < 3; ++ind){
-        cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + (size_t)ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
-        cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag + (size_t)ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
-        cudaMemcpyAsync(B_intmp,     pinned_B_in     + (size_t)ind*num_baselines*2, num_baselines*2*sizeof(float), cudaMemcpyHostToDevice, stream3);
-        cudaMemcpyAsync(V_intmp,     pinned_V_in     + (size_t)ind*9,               3            *3*sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
+    for(ind=0; ind<num_snapshots; ind++){
+        cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(B_intmp,     pinned_B_in     + ind*num_baselines*2, num_baselines*2*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(V_intmp,     pinned_V_in     + ind*9,               3            *3*sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
 
         if(ind == 0){
             cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
@@ -1107,8 +1108,8 @@ int FIpipe2(float* Visreal,
         }
     }
 
-    cudaStreamWaitEvent(stream1, events[2], 0);
-    cudaStreamWaitEvent(stream2, events[2], 0);
+    cudaStreamWaitEvent(stream1, events[ind-1], 0);
+    cudaStreamWaitEvent(stream2, events[ind-1], 0);
 
     cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
     cudaMemsetAsync(conv_corr_kernel,  0, (image_size/2+1)         *sizeof(float), stream2);
@@ -1126,11 +1127,11 @@ int FIpipe2(float* Visreal,
     coordschange       <<<Bs, Ts, 0,  stream2>>> (output_index, V_in,            image_size);
     p2p                <<<Bs, Ts, 0,  stream2>>> (output_index, V_in, cell_size, image_size);
 
-    cudaEventRecord    (eventstream[2], stream2);
-    cudaStreamWaitEvent(stream1, eventstream[2], 0);
+    cudaEventRecord    (eventstream[ind-1], stream2);
+    cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
     finalinterp        <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
     max_large          <<<Br, Tr, Sr, stream1>>> (dirty3, max_tmp, region_num, region_size, image_size);
-    max_small          <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, /* bid_ind= */ 2);
+    max_small          <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, ind-1);
 
     cudaStreamSynchronize(stream1);
 
@@ -1142,7 +1143,7 @@ int FIpipe2(float* Visreal,
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    for(size_t i=0; i<num_events; i++){
+    for(i=0; i<num_events; i++){
         cudaEventDestroy(eventstream[i]);
         cudaEventDestroy(events[i]);
         cudaEventDestroy(events_kernel[i]);
