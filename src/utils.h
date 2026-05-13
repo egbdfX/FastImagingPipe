@@ -27,6 +27,16 @@ int FIpipe             (float* Visreal,
                         size_t num_snapshots,
                         float  cell_size,
                         size_t unit_size);
+int FIpipe2            (float* Visreal,
+                        float* Visimag,
+                        float* Bin,
+                        float* Vin,
+                        float* result_array,
+                        size_t num_baselines,
+                        size_t image_size,
+                        size_t num_snapshots,
+                        float  cell_size,
+                        size_t unit_size);
 float* read_fits_image (const char* filename, long*  naxes);
 int    write_fits_image(const char* filename, float* image_data, long* naxes);
 

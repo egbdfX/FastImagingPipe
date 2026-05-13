@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <stdio.h>
 #include <iostream>
 #include <cmath>
 #include <cufft.h>
@@ -877,4 +878,317 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaFree(dirty3);
 
 	return 0;
+}
+
+
+
+/*************************************************************************/
+
+/**
+ * @brief Ceiling Divide.
+ *
+ * Perform a/b, rounding up.
+ *
+ * @param [in]  a  Dividend.
+ * @param [in]  b  Divisor. Undefined behaviour if 0.
+ * @return Quotient, rounded up to nearest integer.
+ */
+
+size_t ceiling_divide(size_t a, size_t b) {
+    size_t q =  a/b;
+    return q + (a > q*b);
+}
+
+/* New FI pipe. */
+int FIpipe2(float* Visreal,
+            float* Visimag,
+            float* Bin,
+            float* Vin,
+            float* result_array,
+            size_t num_baselines,
+            size_t image_size,
+            size_t num_snapshots,
+            float  cell_size,
+            size_t unit_size){
+    float *Vis_real, *Vis_imag, *B_in, *V_in;
+    float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
+    float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
+    float *dirty1, *dirty2, *dirty3, *dirtyp;
+    float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *pixel_ind, *output_index, *max_tmp, *maxall;
+    cudaError_t cudaError;
+    cufftComplex *r_grid_stack;
+    int bid_ind;
+    size_t shared_mem_size;
+    size_t num_blocks;
+    const size_t num_threads = 1024;
+    const size_t region_num  = 32;
+    const size_t region_size = ceiling_divide(image_size, region_num);
+
+    cudaStream_t stream1, stream2, stream3;
+    cufftHandle plan;
+
+    cudaEvent_t start, stop, eventstream[3], events[3], events_kernel[3];
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventCreate(&eventstream[0]);
+    cudaEventCreate(&eventstream[1]);
+    cudaEventCreate(&eventstream[2]);
+    cudaEventCreate(&events[0]);
+    cudaEventCreate(&events[1]);
+    cudaEventCreate(&events[2]);
+    cudaEventCreate(&events_kernel[0]);
+    cudaEventCreate(&events_kernel[1]);
+    cudaEventCreate(&events_kernel[2]);
+
+    size_t grid_size = image_size + (image_size/2) + (image_size&1); // * 1.5, rounding up
+    float r1r2_scale = cell_size*grid_size;
+    float conv_corr_norm_factor = 2.4937047051153827;
+
+    cudaMalloc((void**)&dirty1,              image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&dirty2,              image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&dirty3,              image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&dirty_pre,           image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)*sizeof(float));
+    cudaMalloc((void**)&r_grid_stack_real,   grid_size  * grid_size  * sizeof(float));
+    cudaMalloc((void**)&r_grid_stack_imag,   grid_size  * grid_size  * sizeof(float));
+    cudaMalloc((void**)&r_grid_stack,        grid_size  * grid_size  * sizeof(cufftComplex));
+    cudaMalloc((void**)&output_index,        image_size * image_size * 2 * sizeof(float));
+    cudaMalloc((void**)&pixel_ind,           image_size * image_size * 2 * sizeof(float));
+    cudaMalloc((void**)&max_tmp,             region_num * region_num * sizeof(float));
+    cudaMalloc((void**)&maxall,              3 * sizeof(float));
+    cudaMalloc((void**)&Vis_realtmp,         num_baselines * 1 * sizeof(float));
+    cudaMalloc((void**)&Vis_imagtmp,         num_baselines * 1 * sizeof(float));
+    cudaMalloc((void**)&B_intmp,             num_baselines * 2 * sizeof(float));
+    cudaMalloc((void**)&V_intmp,             3 * 3 * sizeof(float));
+    cudaMalloc((void**)&Vis_real,            num_baselines * 1 * sizeof(float));
+    cudaMalloc((void**)&Vis_imag,            num_baselines * 1 * sizeof(float));
+    cudaMalloc((void**)&B_in,                num_baselines * 2 * sizeof(float));
+    cudaMalloc((void**)&V_in,                3 * 3 * sizeof(float));
+
+    cudaMallocHost((void**)&pinned_Vis_real, num_baselines*num_snapshots*sizeof(float));
+    cudaMallocHost((void**)&pinned_Vis_imag, num_baselines*num_snapshots*sizeof(float));
+    cudaMallocHost((void**)&pinned_B_in,     num_baselines*2*num_snapshots*sizeof(float));
+    cudaMallocHost((void**)&pinned_V_in,     3*3*num_snapshots*sizeof(float));
+    memcpy(pinned_Vis_real, Visreal,         num_baselines*num_snapshots*sizeof(float));
+    memcpy(pinned_Vis_imag, Visimag,         num_baselines*num_snapshots*sizeof(float));
+    memcpy(pinned_B_in,     Bin,             num_baselines*2*num_snapshots*sizeof(float));
+    memcpy(pinned_V_in,     Vin,             3*3*num_snapshots*sizeof(float));
+
+    cudaMemset(dirty1, 0, image_size * image_size * sizeof(float));
+    cudaMemset(dirty2, 0, image_size * image_size * sizeof(float));
+    cudaMemset(dirty3, 0, image_size * image_size * sizeof(float));
+
+    cudaError = cudaGetLastError();
+    if(cudaError != cudaSuccess){
+        printf("ERROR! GPU Kernel 1 error.\n");
+        printf("CUDA error code: %d; string: %s;\n", (int)cudaError, cudaGetErrorString(cudaError));
+    }else{
+        printf("No CUDA error 1.\n");
+    }
+
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+
+    cufftCreate(&plan);
+    cufftSetStream(plan, stream1);
+    cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
+
+    dim3 numThreads = {32, 32};
+    dim3 numBlocks  = {
+        (unsigned)ceiling_divide(image_size, numThreads.x),
+        (unsigned)ceiling_divide(image_size, numThreads.y),
+    };
+
+    cudaEventRecord(start);
+    /* ****************************************************** */
+    for(int ind = 0; ind < 3; ++ind){
+        cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + (size_t)ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag + (size_t)ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(B_intmp,     pinned_B_in     + (size_t)ind*num_baselines*2, num_baselines*2*sizeof(float), cudaMemcpyHostToDevice, stream3);
+        cudaMemcpyAsync(V_intmp,     pinned_V_in     + (size_t)ind*9,               3            *3*sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
+
+        if(ind == 0){
+            cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(B_in,     B_intmp,     num_baselines*2*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(V_in,     V_intmp,     3            *3*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaEventRecord(events[ind],                                                                    stream3);
+        }else{
+            cudaStreamWaitEvent(stream1, events[ind-1], 0);
+            cudaStreamWaitEvent(stream2, events[ind-1], 0);
+
+            cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
+            cudaMemsetAsync(conv_corr_kernel,  0, (image_size/2+1)         *sizeof(float), stream2);
+            cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
+            cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
+            cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
+
+            num_blocks = ceiling_divide(image_size/2+1,      num_threads);
+            convolveKernel     <<<num_blocks, num_threads, 0, stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
+            num_blocks = ceiling_divide(num_baselines,       num_threads);
+            computeVisWeighted <<<num_blocks, num_threads, 0, stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+            gridding           <<<num_blocks, num_threads, 0, stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+            num_blocks = ceiling_divide(grid_size*grid_size, num_threads);
+            combineToComplex   <<<num_blocks, num_threads, 0, stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+            cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
+            accumulation       <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, r_grid_stack, image_size, grid_size);
+            scaling            <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
+            coordschange       <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, image_size);
+            p2p                <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, cell_size, image_size);
+
+            cudaEventRecord    (eventstream[ind-1], stream2);
+            cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
+
+            if(ind == 1 || ind == 2){
+                dirtyp = ind == 1 ? dirty1 : dirty2;
+                finalinterp    <<<numBlocks,  numThreads,  0, stream1>>> (output_index, dirty_pre, dirtyp, image_size, num_baselines);
+                num_blocks = region_num*region_num;
+                shared_mem_size = num_threads * sizeof(float);
+                max_large      <<<num_blocks, num_threads, shared_mem_size, stream1>>> (dirtyp, max_tmp, region_num, region_size, image_size);
+                num_blocks = 1;
+                bid_ind = ind - 1;
+                max_small      <<<num_blocks, num_threads, shared_mem_size, stream1>>> (max_tmp, maxall, image_size, bid_ind);
+            }
+
+            cudaEventRecord(events_kernel[ind],stream1);
+            cudaStreamWaitEvent(stream3,events_kernel[ind],0);
+            cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(B_in,     B_intmp,     num_baselines*2*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaMemcpyAsync(V_in,     V_intmp,     3            *3*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
+            cudaEventRecord(events[ind], stream3);
+        }
+    }
+
+    cudaStreamWaitEvent(stream1, events[2], 0);
+    cudaStreamWaitEvent(stream2, events[2], 0);
+
+    cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
+    cudaMemsetAsync(conv_corr_kernel,  0, (image_size/2+1)         *sizeof(float), stream2);
+    cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
+    cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
+    cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
+
+    num_blocks = ceiling_divide(image_size/2+1,      num_threads);
+    convolveKernel     <<<num_blocks, num_threads, 0, stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
+    num_blocks = ceiling_divide(num_baselines,       num_threads);
+    computeVisWeighted <<<num_blocks, num_threads, 0, stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+    gridding           <<<num_blocks, num_threads, 0, stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+    num_blocks = ceiling_divide(grid_size*grid_size, num_threads);
+    combineToComplex   <<<num_blocks, num_threads, 0, stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+    cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
+    accumulation       <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, r_grid_stack, image_size, grid_size);
+    scaling            <<<numBlocks,  numThreads,  0, stream1>>> (dirty_pre, conv_corr_kernel, image_size, conv_corr_norm_factor);
+    coordschange       <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, image_size);
+    p2p                <<<numBlocks,  numThreads,  0, stream2>>> (output_index, V_in, cell_size, image_size);
+
+    cudaEventRecord(eventstream[2],stream2);
+    cudaStreamWaitEvent(stream1,eventstream[2],0);
+    finalinterp        <<<numBlocks,  numThreads,  0, stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
+    num_blocks = region_num*region_num;
+    shared_mem_size = num_threads * sizeof(float);
+    max_large          <<<num_blocks, num_threads, shared_mem_size, stream1>>> (dirty3, max_tmp, region_num, region_size, image_size);
+    num_blocks = 1;
+    bid_ind = 2;
+    max_small          <<<num_blocks, num_threads, shared_mem_size, stream1>>> (max_tmp, maxall, image_size, bid_ind);
+
+    cudaStreamSynchronize(stream1);
+
+    /* ****************************************************** */
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    std::cout << "Time elapsed: " << milliseconds << " ms" << std::endl;
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    for(int i = 0; i < 3; i++){
+        cudaEventDestroy(eventstream[i]);
+        cudaEventDestroy(events[i]);
+        cudaEventDestroy(events_kernel[i]);
+    }
+
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
+
+    cudaFree(dirty_pre);
+    cudaFree(conv_corr_kernel);
+    cudaFree(r_grid_stack_real);
+    cudaFree(r_grid_stack_imag);
+    cudaFree(r_grid_stack);
+    cudaFree(output_index);
+    cudaFree(pixel_ind);
+    cudaFree(max_tmp);
+    cudaFree(Vis_realtmp);
+    cudaFree(Vis_imagtmp);
+    cudaFree(B_intmp);
+    cudaFree(V_intmp);
+    cudaFree(Vis_real);
+    cudaFree(Vis_imag);
+    cudaFree(B_in);
+    cudaFree(V_in);
+
+    cudaFreeHost(pinned_Vis_real);
+    cudaFreeHost(pinned_Vis_imag);
+    cudaFreeHost(pinned_B_in);
+    cudaFreeHost(pinned_V_in);
+
+    // FI Trigger
+    float* d_data_1;
+    float* d_data_2;
+    float* diff_out;
+    float* result_data;
+    float  C = 1e-6;
+
+    size_t unit_num = image_size/unit_size;
+
+    cudaMalloc((void**)&d_data_1,    image_size*image_size*sizeof(float));
+    cudaMalloc((void**)&d_data_2,    image_size*image_size*sizeof(float));
+    cudaMalloc((void**)&diff_out,    image_size*image_size*sizeof(float));
+    cudaMalloc((void**)&result_data, unit_num  *unit_num  *sizeof(float));
+
+    cudaMemset(d_data_1,    0, image_size*image_size*sizeof(float));
+    cudaMemset(d_data_2,    0, image_size*image_size*sizeof(float));
+    cudaMemset(diff_out,    0, image_size*image_size*sizeof(float));
+    cudaMemset(result_data, 0, unit_num  *unit_num  *sizeof(float));
+
+    cudaEvent_t start1, stop1;
+    cudaEventCreate(&start1);
+    cudaEventCreate(&stop1);
+
+    cudaEventRecord(start1);
+    /* ****************************************************** */
+    size_t size = image_size * image_size;
+    num_blocks = ceiling_divide(size, num_threads);
+    subtraction       <<<num_blocks, num_threads>>> (dirty1, dirty2, d_data_1, size);
+    subtraction       <<<num_blocks, num_threads>>> (dirty2, dirty3, d_data_2, size);
+    setNonPositiveToC <<<num_blocks, num_threads>>> (dirty2, size, C); // Be careful about this, because when there are a lot of trigger, this may cause trouble (because the image dirty2 has been changed by this).
+    subtraction       <<<num_blocks, num_threads>>> (d_data_1, d_data_2, diff_out, size);
+    num_blocks = unit_num*unit_num;
+    shared_mem_size = 3 * num_threads * sizeof(float);
+    tlisi             <<<num_blocks, num_threads, shared_mem_size>>>(diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+    /* ****************************************************** */
+    cudaEventRecord(stop1);
+    cudaEventSynchronize(stop1);
+    float milliseconds1 = 0;
+    cudaEventElapsedTime(&milliseconds1, start1, stop1);
+    printf("Time elapsed: %f ms\n", milliseconds1);
+
+    cudaEventDestroy(start1);
+    cudaEventDestroy(stop1);
+
+    cudaMemcpy(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_data_1);
+    cudaFree(d_data_2);
+    cudaFree(diff_out);
+    cudaFree(result_data);
+    cudaFree(dirty1);
+    cudaFree(dirty2);
+    cudaFree(dirty3);
+
+    return 0;
 }

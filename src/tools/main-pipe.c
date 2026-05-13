@@ -122,7 +122,7 @@ int main_pipe(int argc, char* argv[]) {
     size_t unit_num = image_size/unit_size;
     float* result_array = (float*)malloc(unit_num*unit_num*sizeof(float));
 
-    FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
+    FIpipe2(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
 
     long naxes[2] = {unit_size, unit_size};
     int status = write_fits_image(output_name, result_array, naxes);
