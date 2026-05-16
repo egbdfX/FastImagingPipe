@@ -23,15 +23,15 @@ int main_pipe(int argc, char* argv[]) {
 
     int rc               = EXIT_FAILURE;
 
-    char* input_Visreal  = (char*)"Visreal0.fits";
-    char* input_Visimag  = (char*)"Visimag0.fits";
-    char* input_Bin      = (char*)"Bin0.fits";
-    char* input_Vin      = (char*)"Vin0.fits";
-    char* output_name    = (char*)"dirty0.fits";
+    char* input_Visreal  = (char*)"Visreal.fits";
+    char* input_Visimag  = (char*)"Visimag.fits";
+    char* input_Bin      = (char*)"Bin.fits";
+    char* input_Vin      = (char*)"Vin.fits";
+    char* output_name    = (char*)"dirty.fits";
 
-    size_t image_size    = 4096;
-    size_t num_baselines = 130816;
-    float  cell_size     = 0.0000072722;
+    size_t image_size    = 1024;
+    size_t num_baselines = 1812480;
+    float  cell_size     = 0.000020595;
     size_t num_snapshots = 3;
     size_t unit_size     = 32;
 
