@@ -1099,9 +1099,6 @@ int FIpipe2(float* Visreal,
     dim3 Tc = {1024},   Bc = {
         (unsigned)ceiling_divide(grid_size*grid_size, Tc.x)
     };
-    dim3 Tf = {1024},   Bf = {
-        (unsigned)ceiling_divide(image_size*image_size, Tf.x),
-    };
     dim3 Tt = {1024},   Bt = {(unsigned)(unit_num*unit_num)};
 
     size_t St = 3 * Tt.x * sizeof(float);
