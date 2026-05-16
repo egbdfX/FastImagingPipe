@@ -6,6 +6,7 @@
 #include <cufft.h>
 #include <device_launch_parameters.h>
 #include <math_constants.h>
+#include <npp.h>
 
 #include "utils.h"
 
@@ -946,6 +947,11 @@ int FIpipe2(float* Visreal,
     cudaEvent_t    start, stop, *eventstream, *events, *events_kernel;
     cudaEvent_t    start1, stop1;
 
+    NppiSize         nppImageSize = {(int)image_size, (int)image_size};
+    NppStreamContext nppCtx1, nppCtx2, nppCtxt;
+    size_t           nppWrkspc1Sz;
+    Npp8u*           nppWrkspc1;
+
 
     /* Device Selection and Property Query */
     if((cudaError = cudaGetDevice(&cudaOrdinal))){
@@ -1007,7 +1013,19 @@ int FIpipe2(float* Visreal,
     }
 
 
+    /* NPP Context initializations */
+    nppGetStreamContext(&nppCtxt);
+    nppCtx2 = nppCtx1 = nppCtxt;
+    nppCtx1.hStream                            = stream1;
+    cudaStreamGetFlags(nppCtx1.hStream, &nppCtx1.nStreamFlags);
+    nppCtx2.hStream                            = stream2;
+    cudaStreamGetFlags(nppCtx2.hStream, &nppCtx2.nStreamFlags);
+    nppiMaxGetBufferHostSize_32f_C1R_Ctx(nppImageSize, &nppWrkspc1Sz, nppCtx1);
+
+
     /* Consolidated memory allocations and initializations. */
+    cudaMalloc((void**)&nppWrkspc1,          nppWrkspc1Sz);
+
     cudaMalloc((void**)&image_buffer,        6 * image_size * image_size * sizeof(float));
     cudaMalloc((void**)&r_grid_stack,        4 * grid_size  * grid_size  * sizeof(float));
     cudaMalloc((void**)&Vis_buffer,          8 * num_baselines * sizeof(float));
@@ -1261,6 +1279,8 @@ int FIpipe2(float* Visreal,
     cudaFree(d_data_2);
     cudaFree(diff_out);
     cudaFree(result_data);
+
+    cudaFree(nppWrkspc1);
 
     return 0;
 }
