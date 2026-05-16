@@ -1253,11 +1253,26 @@ int FIpipe2(float* Visreal,
 
     cudaEventRecord(start1);
     /* ****************************************************** */
-    subtraction       <<<Bf, Tf>>>     (dirty1,   dirty2,   d_data_1, image_size*image_size);
-    subtraction       <<<Bf, Tf>>>     (dirty2,   dirty3,   d_data_2, image_size*image_size);
-    setNonPositiveToC <<<Bf, Tf>>>     (dirty2,                       image_size*image_size, C); // Be careful about this, because when there are a lot of trigger, this may cause trouble (because the image dirty2 has been changed by this).
-    subtraction       <<<Bf, Tf>>>     (d_data_1, d_data_2, diff_out, image_size*image_size);
-    tlisi             <<<Bt, Tt, St>>> (diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+    nppiAbsDiff_32f_C1R_Ctx        (dirty1,   image_size*sizeof(float),
+                                    dirty2,   image_size*sizeof(float),
+                                    d_data_1, image_size*sizeof(float),
+                                    nppImageSize,          nppCtxt);
+    nppiAbsDiff_32f_C1R_Ctx        (dirty2,   image_size*sizeof(float),
+                                    dirty3,   image_size*sizeof(float),
+                                    d_data_2, image_size*sizeof(float),
+                                    nppImageSize,          nppCtxt);
+    nppiThreshold_LTVal_32f_C1R_Ctx(dirty2, image_size*sizeof(float),
+                                    dirty2, image_size*sizeof(float), // (In-place)
+                                    nppImageSize,
+                                    nextafterf(0.0f, 1.0f),           // LTVal uses < and we want <=
+                                    C,
+                                    nppCtxt);
+    nppiAbsDiff_32f_C1R_Ctx        (d_data_1, image_size*sizeof(float),
+                                    d_data_2, image_size*sizeof(float),
+                                    diff_out, image_size*sizeof(float),
+                                    nppImageSize,          nppCtxt);
+    tlisi <<<Bt, Tt, St>>> (diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+
     /* ****************************************************** */
     cudaEventRecord(stop1);
     cudaEventSynchronize(stop1);
