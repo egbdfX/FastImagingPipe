@@ -3,7 +3,7 @@ project('FastImagingPipe',
     version:         '0.1',
     meson_version:   '>= 1.10.0',
     license:         'BSD-3-Clause',
-    # license_files:   ['LICENSE.txt'],
+    license_files:   ['LICENSE'],
     default_options: [
         'c_std=gnu11,gnu99,c11,c99',
         'cpp_std=gnu++14,gnu++11,c++14,c++11',
