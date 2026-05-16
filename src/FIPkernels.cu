@@ -936,50 +936,75 @@ int FIpipe2(float* Visreal,
     const float conv_corr_norm_factor = 2.4937047051153827;
     const float C            = 1e-6;
 
-    cudaError_t   cudaError;
-    cufftComplex* r_grid_stack;
-    cudaStream_t  stream1, stream2, stream3;
-    cufftHandle   plan;
-    cudaEvent_t   start, stop, *eventstream, *events, *events_kernel;
-    cudaEvent_t   start1, stop1;
+    cudaError_t    cudaError;
+    cufftResult    cufftError;
+    int            cudaOrdinal;
+    cudaDeviceProp cudaDevProps;
+    cufftComplex*  r_grid_stack;
+    cudaStream_t   stream1, stream2, stream3;
+    cufftHandle    plan;
+    cudaEvent_t    start, stop, *eventstream, *events, *events_kernel;
+    cudaEvent_t    start1, stop1;
 
 
-    /**
-     * There are at least six typical launch configurations:
-     *
-     *   NAME            #THRD  #BLOCK                             SHMEM
-     *   "s" (Square):   32x32, ~image_size/32 x ~image_size/32
-     *   "k" (Convolve): 1024,  ~(image_size/2+1)/1024
-     *   "g" (Gridding): 1024,  ~num_baselines/1024
-     *   "c" (Combine):  1024,  ~grid_size*grid_size/1024
-     *   "r" (Region):   1024,   region_num*region_num,            1024 floats
-     *   "f" (Final):    1024,  ~image_size*image_size
-     *   "t" (TLISI):    1024,   unit_num*unit_num                 3*1024 floats
-     *
-     * Abbreviate them and centralize their calculations here.
-     */
+    /* Device Selection and Property Query */
+    if((cudaError = cudaGetDevice(&cudaOrdinal))){
+        printf("Cannot find CUDA device (%d)\n", (int)cudaError);
+        return -1;
+    }
+    if((cudaError = cudaGetDeviceProperties(&cudaDevProps, cudaOrdinal))){
+        printf("Cannot get the properties of CUDA device with ordinal %d (%d)\n",
+               (int)cudaOrdinal,
+               (int)cudaError);
+        return -1;
+    }else{
+        printf("Selected GPU %d: %s (UUID: "
+               "GPU-%02hhx%02hhx%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-"
+                   "%02hhx%02hhx-%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx, "
+               "PCIe [%04x:]%02x:%02x.0)\n",
+               cudaOrdinal,
+               cudaDevProps.name,
+               cudaDevProps.uuid.bytes[ 0], cudaDevProps.uuid.bytes[ 1],
+               cudaDevProps.uuid.bytes[ 2], cudaDevProps.uuid.bytes[ 3],
+               cudaDevProps.uuid.bytes[ 4], cudaDevProps.uuid.bytes[ 5],
+               cudaDevProps.uuid.bytes[ 6], cudaDevProps.uuid.bytes[ 7],
+               cudaDevProps.uuid.bytes[ 8], cudaDevProps.uuid.bytes[ 9],
+               cudaDevProps.uuid.bytes[10], cudaDevProps.uuid.bytes[11],
+               cudaDevProps.uuid.bytes[12], cudaDevProps.uuid.bytes[13],
+               cudaDevProps.uuid.bytes[14], cudaDevProps.uuid.bytes[15],
+               cudaDevProps.pciDomainID,
+               cudaDevProps.pciBusID,
+               cudaDevProps.pciDeviceID);
+    }
+    if(cudaDevProps.maxThreadsPerBlock < 1024){
+        printf("Selected CUDA device supports fewer than 1024 threads/block! (%d)\n",
+               cudaDevProps.maxThreadsPerBlock);
+        return -1;
+    }
 
-    dim3 Ts = {32, 32}, Bs = {
-        (unsigned)ceiling_divide(image_size, Ts.x),
-        (unsigned)ceiling_divide(image_size, Ts.y),
-    };
-    dim3 Tk = {1024},   Bk = {
-        (unsigned)ceiling_divide(image_size/2+1, Tk.x)
-    };
-    dim3 Tg = {1024},   Bg = {
-        (unsigned)ceiling_divide(num_baselines,  Tg.x)
-    };
-    dim3 Tc = {1024},   Bc = {
-        (unsigned)ceiling_divide(grid_size*grid_size, Tc.x)
-    };
-    dim3 Tr = {1024},   Br = {region_num*region_num};
-    dim3 Tf = {1024},   Bf = {
-        (unsigned)ceiling_divide(image_size*image_size, Tf.x),
-    };
-    dim3 Tt = {1024},   Bt = {(unsigned)(unit_num*unit_num)};
 
-    size_t Sr =     Tr.x * sizeof(float);
-    size_t St = 3 * Tt.x * sizeof(float);
+    /* CUDA Stream creations */
+    if((cudaError = cudaStreamCreate(&stream1)) != cudaSuccess ||
+       (cudaError = cudaStreamCreate(&stream2)) != cudaSuccess ||
+       (cudaError = cudaStreamCreate(&stream3)) != cudaSuccess){
+        printf("Cannot create CUDA stream on selected device! (%d)\n", (int)cudaError);
+        return -1;
+    }
+
+
+    /* cuFFT Plan creation */
+    if((cufftError = cufftCreate(&plan))){
+        printf("Cannot create cuFFT plan! (%d)\n", (int)cufftError);
+        return -1;
+    }
+    if((cufftError = cufftSetStream(plan, stream1))){
+        printf("Cannot assign stream to cuFFT plan! (%d)\n", (int)cufftError);
+        return -1;
+    }
+    if((cufftError = cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C))){
+        printf("Cannot make cuFFT plan for grid of size %zu (%d)\n", grid_size, (int)cufftError);
+        return -1;
+    }
 
 
     /* Consolidated memory allocations and initializations. */
@@ -1028,16 +1053,42 @@ int FIpipe2(float* Visreal,
     }
 
 
-    /* CUDA Stream creations */
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
-    cudaStreamCreate(&stream3);
+    /**
+     * There are at least six typical launch configurations:
+     *
+     *   NAME            #THRD  #BLOCK                             SHMEM
+     *   "s" (Square):   32x32, ~image_size/32 x ~image_size/32
+     *   "k" (Convolve): 1024,  ~(image_size/2+1)/1024
+     *   "g" (Gridding): 1024,  ~num_baselines/1024
+     *   "c" (Combine):  1024,  ~grid_size*grid_size/1024
+     *   "r" (Region):   1024,   region_num*region_num,            1024 floats
+     *   "f" (Final):    1024,  ~image_size*image_size
+     *   "t" (TLISI):    1024,   unit_num*unit_num                 3*1024 floats
+     *
+     * Abbreviate them and centralize their calculations here.
+     */
 
+    dim3 Ts = {32, 32}, Bs = {
+        (unsigned)ceiling_divide(image_size, Ts.x),
+        (unsigned)ceiling_divide(image_size, Ts.y),
+    };
+    dim3 Tk = {1024},   Bk = {
+        (unsigned)ceiling_divide(image_size/2+1, Tk.x)
+    };
+    dim3 Tg = {1024},   Bg = {
+        (unsigned)ceiling_divide(num_baselines,  Tg.x)
+    };
+    dim3 Tc = {1024},   Bc = {
+        (unsigned)ceiling_divide(grid_size*grid_size, Tc.x)
+    };
+    dim3 Tr = {1024},   Br = {region_num*region_num};
+    dim3 Tf = {1024},   Bf = {
+        (unsigned)ceiling_divide(image_size*image_size, Tf.x),
+    };
+    dim3 Tt = {1024},   Bt = {(unsigned)(unit_num*unit_num)};
 
-    /* cuFFT init */
-    cufftCreate(&plan);
-    cufftSetStream(plan, stream1);
-    cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
+    size_t Sr =     Tr.x * sizeof(float);
+    size_t St = 3 * Tt.x * sizeof(float);
 
 
     /* CUDA Event creation */
@@ -1053,7 +1104,7 @@ int FIpipe2(float* Visreal,
     }
 
 
-
+    /* Main Loop */
     cudaEventRecord(start);
     /* ****************************************************** */
     for(ind=0; ind<num_snapshots; ind++){
