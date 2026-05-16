@@ -57,6 +57,7 @@ MANIFEST
 # Ignorable files particular to this project
 #  Build output of Makefile
 sharedlibrary_gpu
+svd_preprocess_gpu
 
 #  Build directory of Meson
 /build/
