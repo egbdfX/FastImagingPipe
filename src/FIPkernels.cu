@@ -1163,8 +1163,7 @@ int FIpipe2(float* Visreal,
             if(ind == 1 || ind == 2){
                 dirtyp = ind == 1 ? dirty1 : dirty2;
                 finalinterp    <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirtyp, image_size, num_baselines);
-                max_large      <<<Br, Tr, Sr, stream1>>> (dirtyp, max_tmp, region_num, region_size, image_size);
-                max_small      <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, /* bid_ind= */ ind-1);
+                nppiMax_32f_C1R_Ctx(dirtyp, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
             }
 
             cudaEventRecord(events_kernel[ind],stream1);
@@ -1199,8 +1198,7 @@ int FIpipe2(float* Visreal,
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
     finalinterp        <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
-    max_large          <<<Br, Tr, Sr, stream1>>> (dirty3, max_tmp, region_num, region_size, image_size);
-    max_small          <<<1,  Tr, Sr, stream1>>> (max_tmp, maxall, image_size, ind-1);
+    nppiMax_32f_C1R_Ctx(dirty3, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
 
     cudaStreamSynchronize(stream1);
 
