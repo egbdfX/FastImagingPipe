@@ -4,7 +4,7 @@ CFITSIO_HOME := $(HOME)/Libraries/cfitsio
 
 INC := -I$(CUDA_HOME)/include -I$(CFITSIO_HOME)/include -I.
 
-LIB := -L$(CUDA_HOME)/lib64 -L$(CFITSIO_HOME)/lib -lcudart -lcfitsio -lcufft
+LIB := -L$(CUDA_HOME)/lib64 -L$(CFITSIO_HOME)/lib -lcudart -lcfitsio -lcufft -lnppc -lnppial -lnppist -lnppitc
 
 GCC := g++
 NVCC := $(CUDA_HOME)/bin/nvcc

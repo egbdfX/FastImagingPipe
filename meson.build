@@ -31,9 +31,13 @@ message('Building for architectures ' + ' '.join(cuda_readable))
 
 cudart  = get_option('cudart') == 'shared' ? 'cudart' : 'cudart_static'
 cudart  = get_option('cudart') == 'none' ? [] : [cudart]
-curand  = dependency('cuda',    modules: ['curand']+cudart,  disabler: true)
-cufft   = dependency('cuda',    modules: ['cufft']+cudart,   required: true)
-cfitsio = dependency('cfitsio',                              required: false,
+curand  = dependency('cuda',    modules: ['curand'] + cudart, disabler: true)
+cufft   = dependency('cuda',    modules: ['cufft']  + cudart, required: true)
+nppc    = dependency('cuda',    modules: ['nppc']   + cudart, required: true)
+nppial  = dependency('cuda',    modules: ['nppial'] + cudart, required: true)
+nppist  = dependency('cuda',    modules: ['nppist'] + cudart, required: true)
+nppitc  = dependency('cuda',    modules: ['nppitc'] + cudart, required: true)
+cfitsio = dependency('cfitsio',                               required: false,
                      fallback: ['cfitsio', 'cfitsio_dep'],
                      default_options: ['warning_level=0'])
 popt    = dependency('popt',                                 required: true,

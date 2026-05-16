@@ -8,7 +8,7 @@ fip = executable('sharedlibrary_gpu',
     files('pipe_interface.cpp',
           'FIPkernels.cu'),
     cuda_args:     cuda_flags + ['-Xcompiler=-fPIC', '--use_fast_math', '-lineinfo'],
-    dependencies:  [cfitsio, cufft],
+    dependencies:  [cfitsio, cufft, nppc, nppial, nppist, nppitc],
     install:       false,
 )
 
@@ -20,6 +20,6 @@ fip = executable('fip',
         'FIPkernels.cu',
     ),
     cuda_args:     cuda_flags + ['-Xcompiler=-fPIC', '--use_fast_math', '-lineinfo'],
-    dependencies:  [popt, cfitsio, cufft],
+    dependencies:  [popt, cfitsio, cufft, nppc, nppial, nppist, nppitc],
     install:       false,
 )
