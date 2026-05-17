@@ -657,11 +657,12 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cufftSetStream(plan, stream1);
 	cufftPlan2d(&plan, grid_size, grid_size, CUFFT_C2C);
 
-	size_t num_threads;
-	size_t num_blocks;
+	size_t num_threads = 1024;
+	size_t num_blocks  = computeCeil(static_cast<float>(image_size/2+1)/num_threads);
 	dim3 numThreads;
 	dim3 numBlocks;
 
+	convolveKernel<<<num_blocks,num_threads>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
 	cudaEventRecord(start);
 	/* ****************************************************** */
 	for (int ind = 0; ind < 3; ++ind){
@@ -683,14 +684,11 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 			cudaStreamWaitEvent(stream2,events[ind-1],0);
 
 			cudaMemsetAsync(dirty_pre, 0, image_size * image_size * sizeof(float),stream1);
-			cudaMemsetAsync(conv_corr_kernel, 0, (image_size/2+1) * sizeof(float),stream2);
 			cudaMemsetAsync(r_grid_stack_real, 0, grid_size * grid_size * sizeof(float),stream1);
 			cudaMemsetAsync(r_grid_stack_imag, 0, grid_size * grid_size * sizeof(float),stream1);
 			cudaMemsetAsync(output_index, 0, image_size * image_size * 2 * sizeof(float),stream2);
 
 			num_threads = 1024;
-			num_blocks = computeCeil(static_cast<float>(image_size/2+1)/num_threads);
-			convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
 			num_blocks = computeCeil(static_cast<float>(num_baselines)/num_threads);
 			computeVisWeighted<<<num_blocks,num_threads,0,stream1>>>(Vis_real,Vis_imag,num_baselines,V_in);
 			gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
@@ -745,14 +743,11 @@ int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin,
 	cudaStreamWaitEvent(stream2,events[2],0);
 
 	cudaMemsetAsync(dirty_pre, 0, image_size * image_size * sizeof(float),stream1);
-	cudaMemsetAsync(conv_corr_kernel, 0, (image_size/2+1) * sizeof(float),stream2);
 	cudaMemsetAsync(r_grid_stack_real, 0, grid_size * grid_size * sizeof(float),stream1);
 	cudaMemsetAsync(r_grid_stack_imag, 0, grid_size * grid_size * sizeof(float),stream1);
 	cudaMemsetAsync(output_index, 0, image_size * image_size * 2 * sizeof(float),stream2);
 
 	num_threads = 1024;
-	num_blocks = computeCeil(static_cast<float>(image_size/2+1)/num_threads);
-	convolveKernel<<<num_blocks,num_threads,0,stream2>>>(conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
 	num_blocks = computeCeil(static_cast<float>(num_baselines)/num_threads);
 	computeVisWeighted<<<num_blocks,num_threads,0,stream1>>>(Vis_real,Vis_imag,num_baselines,V_in);
 	gridding<<<num_blocks,num_threads,0,stream1>>>(B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
@@ -1117,7 +1112,14 @@ int FIpipe2(float* Visreal,
     }
 
 
-    /* Main Loop */
+    /**
+     * Main Loop
+     *
+     * Begin by calculating the coefficients of a convolution kernel that are static
+     * for the entire duration of the loop. Exclude this from timing.
+     */
+
+    convolveKernel <<<Bk, Tk>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
     cudaEventRecord(start);
     /* ****************************************************** */
     for(ind=0; ind<num_snapshots; ind++){
@@ -1137,12 +1139,10 @@ int FIpipe2(float* Visreal,
             cudaStreamWaitEvent(stream2, events[ind-1], 0);
 
             cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
-            cudaMemsetAsync(conv_corr_kernel,  0, (image_size/2+1)         *sizeof(float), stream2);
             cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-            convolveKernel     <<<Bk, Tk, 0,  stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
             computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
             gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
             combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
@@ -1175,12 +1175,10 @@ int FIpipe2(float* Visreal,
     cudaStreamWaitEvent(stream2, events[ind-1], 0);
 
     cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
-    cudaMemsetAsync(conv_corr_kernel,  0, (image_size/2+1)         *sizeof(float), stream2);
     cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-    convolveKernel     <<<Bk, Tk, 0,  stream2>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
     computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
     gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
     combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
