@@ -395,6 +395,112 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 	}
 }
 
+__global__ void fused_p2p(float* output_index,
+                          const float  V00, const float V01,
+                          const float  V10, const float V11,
+                          const float  V20, const float V21, const float V22,
+                          const float  dc_rad,
+                          const size_t di){
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
+    const float xi   = V20/V22;
+    const float eta  = V21/V22;
+    const float di2  = di*0.5f;
+    const float dc   = dc_rad / M_PI * 180;
+
+    if(idx<di && idy<di){
+        /**
+         * Kernel (ex-)coordschange().
+         *
+         * Because of fusion, the following no longer needs to be spilled and
+         * reloaded from memory:
+         *
+         * p1 = output_index[(idx*di+idy)*2+0]
+         *    = ( -V[0][0]*(idx-di2) + V[1][0]*(idy-di2) ) / fabs(V[2][2]) + di2
+         * p2 = output_index[(idx*di+idy)*2+1]
+         *    = ( -V[0][1]*(idx-di2) + V[1][1]*(idy-di2) ) / fabs(V[2][2]) + di2
+         */
+
+        const float p1 = (-V00*(idx-di2) + V10*(idy-di2)) / fabsf(V22) + di2;
+        const float p2 = (-V01*(idx-di2) + V11*(idy-di2)) / fabsf(V22) + di2;
+
+
+        /**
+         * Kernel (ex-)p2p().
+         *
+         * According to paper:
+         *     M. R.  Calabretta, E. W.  Greisen, 'Representations of celestial coordinates in FITS,' A&A,395(3),1077-1122,2002.
+         */
+
+        float x  = -dc * (p1 - (di2 + 1.0f));
+        float y  =  dc * (p2 - (di2 + 1.0f));
+
+        float r0 = 180.0f / M_PI;
+        float x0 = x / r0;
+        float y0 = y / r0;
+        float r2 = x0 * x0 + y0 * y0;
+
+        float phi;
+        if (r2 != 0.0f){
+            phi = __atan2d(x0, -y0);
+        }else{
+            phi = 0.0f;
+        }
+
+        float theta;
+        if(r2 < 0.5f){
+            theta = __acosd(sqrtf(r2));
+        }else if (r2 <= 1.0f){
+            theta = __asind(sqrtf(1.0f - r2));
+        }else{
+            /**
+             * Because of the early return here, we must spill to output_index the values
+             * that *would* have been present by the legacy coordschange() had it actually
+             * run to maintain perfect equivalence.
+             */
+
+            output_index[(idx*di+idy)*2+0] = p1;
+            output_index[(idx*di+idy)*2+1] = p2;
+
+            return;
+        }
+
+        float sinphi, cosphi;
+        __sincosd(phi, sinphi, cosphi);
+        x = sinphi;
+        y = cosphi;
+
+        float t = (90.0f - fabsf(theta)) / 180.0f * M_PI;
+        float z, costhe;
+        if(t < 1.0e-5f){
+            if(theta > 0.0f){
+                z =        t*t*0.5f;
+            }else{
+                z = 2.0f - t*t*0.5f;
+            }
+            costhe = t;
+        }else{
+            z      = 1.0f - __sind(theta);
+            costhe =        __cosd(theta);
+        }
+
+        r0 = 180.0f / M_PI;
+        float r = r0 * costhe;
+        float w = xi*xi + eta*eta;
+
+        if(w == 0.0f){
+            x =  r*x;
+            y = -r*y;
+        }else{
+            x =  r*x + z*r0*xi;
+            y = -r*y + z*r0*eta;
+        }
+
+        output_index[(idx*di+idy)*2+0] = -x/dc + di2 + 1.0f;
+        output_index[(idx*di+idy)*2+1] =  y/dc + di2 + 1.0f;
+    }
+}
+
 __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty, size_t image_size, size_t num_baselines) {
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
@@ -913,6 +1019,7 @@ int FIpipe2(float* Visreal,
     float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *output_index, *max_tmp, *maxall;
     float* image_buffer;
     float* Vis_buffer;
+    float (*V)[3];
 
     float* d_data_1;
     float* d_data_2;
@@ -1122,7 +1229,7 @@ int FIpipe2(float* Visreal,
     convolveKernel <<<Bk, Tk>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
     cudaEventRecord(start);
     /* ****************************************************** */
-    for(ind=0; ind<num_snapshots; ind++){
+    for(ind=0, V=((float(*)[3])pinned_V_in)-3; ind<num_snapshots; ind++, V+=3){
         cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
         cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
         cudaMemcpyAsync(B_intmp,     pinned_B_in     + ind*num_baselines*2, num_baselines*2*sizeof(float), cudaMemcpyHostToDevice, stream3);
@@ -1149,8 +1256,9 @@ int FIpipe2(float* Visreal,
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
             accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
             scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-            coordschange       <<<Bs, Ts, 0,  stream2>>> (output_index, V_in,            image_size);
-            p2p                <<<Bs, Ts, 0,  stream2>>> (output_index, V_in, cell_size, image_size);
+            fused_p2p          <<<Bs, Ts, 0,  stream2>>> (output_index, V[0][0], V[0][1],
+                                                                        V[1][0], V[1][1],
+                                                                        V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
@@ -1185,8 +1293,9 @@ int FIpipe2(float* Visreal,
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
     accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
     scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-    coordschange       <<<Bs, Ts, 0,  stream2>>> (output_index, V_in,            image_size);
-    p2p                <<<Bs, Ts, 0,  stream2>>> (output_index, V_in, cell_size, image_size);
+    fused_p2p          <<<Bs, Ts, 0,  stream2>>> (output_index, V[0][0], V[0][1],
+                                                                V[1][0], V[1][1],
+                                                                V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
