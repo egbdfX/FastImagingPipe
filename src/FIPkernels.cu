@@ -1028,13 +1028,13 @@ int FIpipe2(float* Visreal,
 
     cudaMalloc((void**)&image_buffer,        6 * image_size * image_size * sizeof(float));
     cudaMalloc((void**)&r_grid_stack,        4 * grid_size  * grid_size  * sizeof(float));
-    cudaMalloc((void**)&Vis_buffer,          8 * num_baselines * sizeof(float));
+    cudaMalloc((void**)&Vis_buffer,          8 * num_baselines           * sizeof(float));
 
-    cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)*sizeof(float));
-    cudaMalloc((void**)&max_tmp,             region_num * region_num * sizeof(float));
-    cudaMalloc((void**)&maxall,              3 * sizeof(float));
-    cudaMalloc((void**)&V_intmp,             3 * 3 * sizeof(float));
-    cudaMalloc((void**)&V_in,                3 * 3 * sizeof(float));
+    cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)             * sizeof(float));
+    cudaMalloc((void**)&max_tmp,             region_num * region_num     * sizeof(float));
+    cudaMalloc((void**)&maxall,              3                           * sizeof(float));
+    cudaMalloc((void**)&V_intmp,             3 * 3                       * sizeof(float));
+    cudaMalloc((void**)&V_in,                3 * 3                       * sizeof(float));
 
     cudaMallocHost((void**)&pinned_Vis_real, num_baselines *     num_snapshots * sizeof(float));
     cudaMallocHost((void**)&pinned_Vis_imag, num_baselines *     num_snapshots * sizeof(float));
@@ -1240,10 +1240,10 @@ int FIpipe2(float* Visreal,
     cudaMalloc((void**)&diff_out,    image_size*image_size*sizeof(float));
     cudaMalloc((void**)&result_data, unit_num  *unit_num  *sizeof(float));
 
-    cudaMemset(d_data_1,    0, image_size*image_size*sizeof(float));
-    cudaMemset(d_data_2,    0, image_size*image_size*sizeof(float));
-    cudaMemset(diff_out,    0, image_size*image_size*sizeof(float));
-    cudaMemset(result_data, 0, unit_num  *unit_num  *sizeof(float));
+    cudaMemset(d_data_1,    0,       image_size*image_size*sizeof(float));
+    cudaMemset(d_data_2,    0,       image_size*image_size*sizeof(float));
+    cudaMemset(diff_out,    0,       image_size*image_size*sizeof(float));
+    cudaMemset(result_data, 0,       unit_num  *unit_num  *sizeof(float));
 
     cudaEventCreate(&start1);
     cudaEventCreate(&stop1);
@@ -1258,8 +1258,8 @@ int FIpipe2(float* Visreal,
                                     dirty3,   image_size*sizeof(float),
                                     d_data_2, image_size*sizeof(float),
                                     nppImageSize,          nppCtxt);
-    nppiThreshold_LTVal_32f_C1R_Ctx(dirty2, image_size*sizeof(float),
-                                    dirty2, image_size*sizeof(float), // (In-place)
+    nppiThreshold_LTVal_32f_C1R_Ctx(dirty2,   image_size*sizeof(float),
+                                    dirty2,   image_size*sizeof(float), // (In-place)
                                     nppImageSize,
                                     nextafterf(0.0f, 1.0f),           // LTVal uses < and we want <=
                                     C,
