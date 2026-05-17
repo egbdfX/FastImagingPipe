@@ -1250,7 +1250,8 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-            computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+            nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
+            nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
             gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
             combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
@@ -1287,7 +1288,8 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
-    computeVisWeighted <<<Bg, Tg, 0,  stream1>>> (Vis_real,Vis_imag,num_baselines,V_in);
+    nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
+    nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
     gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
     combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
