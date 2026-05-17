@@ -1012,9 +1012,9 @@ int FIpipe2(float* Visreal,
             size_t num_snapshots,
             float  cell_size,
             size_t unit_size){
-    float *Vis_real, *Vis_imag, *B_in, *V_in;
+    float *Vis_real, *Vis_imag, *B_in;
     float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
-    float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in, *pinned_V_in;
+    float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
     float *dirty_pre, *conv_corr_kernel, *r_grid_stack_real, *r_grid_stack_imag, *output_index, *max_tmp, *maxall;
     float* image_buffer;
@@ -1136,16 +1136,13 @@ int FIpipe2(float* Visreal,
     cudaMalloc((void**)&max_tmp,             region_num * region_num     * sizeof(float));
     cudaMalloc((void**)&maxall,              3                           * sizeof(float));
     cudaMalloc((void**)&V_intmp,             3 * 3                       * sizeof(float));
-    cudaMalloc((void**)&V_in,                3 * 3                       * sizeof(float));
 
     cudaMallocHost((void**)&pinned_Vis_real, num_baselines *     num_snapshots * sizeof(float));
     cudaMallocHost((void**)&pinned_Vis_imag, num_baselines *     num_snapshots * sizeof(float));
     cudaMallocHost((void**)&pinned_B_in,     num_baselines * 2 * num_snapshots * sizeof(float));
-    cudaMallocHost((void**)&pinned_V_in,                 3 * 3 * num_snapshots * sizeof(float));
     memcpy(pinned_Vis_real, Visreal,         num_baselines *     num_snapshots * sizeof(float));
     memcpy(pinned_Vis_imag, Visimag,         num_baselines *     num_snapshots * sizeof(float));
     memcpy(pinned_B_in,     Bin,             num_baselines * 2 * num_snapshots * sizeof(float));
-    memcpy(pinned_V_in,     Vin,                         3 * 3 * num_snapshots * sizeof(float));
 
     cudaMemset(image_buffer,  0,  6*image_size*image_size * sizeof(float));
     dirty_pre    = image_buffer + 0*image_size*image_size;
@@ -1229,17 +1226,15 @@ int FIpipe2(float* Visreal,
     convolveKernel <<<Bk, Tk>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
     cudaEventRecord(start);
     /* ****************************************************** */
-    for(ind=0, V=((float(*)[3])pinned_V_in)-3; ind<num_snapshots; ind++, V+=3){
+    for(ind=0, V=((float(*)[3])Vin)-3; ind<num_snapshots; ind++, V+=3){
         cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
         cudaMemcpyAsync(Vis_imagtmp, pinned_Vis_imag + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
         cudaMemcpyAsync(B_intmp,     pinned_B_in     + ind*num_baselines*2, num_baselines*2*sizeof(float), cudaMemcpyHostToDevice, stream3);
-        cudaMemcpyAsync(V_intmp,     pinned_V_in     + ind*9,               3            *3*sizeof(float), cudaMemcpyHostToDevice, stream3); // cross term included
 
         if(ind == 0){
             cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaMemcpyAsync(B_in,     B_intmp,     num_baselines*2*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
-            cudaMemcpyAsync(V_in,     V_intmp,     3            *3*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaEventRecord(events[ind],                                                                    stream3);
         }else{
             cudaStreamWaitEvent(stream1, events[ind-1], 0);
@@ -1275,7 +1270,6 @@ int FIpipe2(float* Visreal,
             cudaMemcpyAsync(Vis_real, Vis_realtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaMemcpyAsync(Vis_imag, Vis_imagtmp, num_baselines*1*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaMemcpyAsync(B_in,     B_intmp,     num_baselines*2*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
-            cudaMemcpyAsync(V_in,     V_intmp,     3            *3*sizeof(float), cudaMemcpyDeviceToDevice, stream3);
             cudaEventRecord(events[ind], stream3);
         }
     }
@@ -1335,12 +1329,10 @@ int FIpipe2(float* Visreal,
     cudaFree(conv_corr_kernel);
     cudaFree(max_tmp);
     cudaFree(V_intmp);
-    cudaFree(V_in);
 
     cudaFreeHost(pinned_Vis_real);
     cudaFreeHost(pinned_Vis_imag);
     cudaFreeHost(pinned_B_in);
-    cudaFreeHost(pinned_V_in);
 
 
     // FI Trigger
