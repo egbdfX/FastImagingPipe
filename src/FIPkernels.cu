@@ -1243,7 +1243,6 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
             cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
-            cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
             nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
             nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
@@ -1280,7 +1279,6 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
     cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
-    cudaMemsetAsync(output_index,      0, image_size * image_size*2*sizeof(float), stream2);
 
     nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
     nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
