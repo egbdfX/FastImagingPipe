@@ -264,6 +264,50 @@ __global__ void gridding(float* B_in, float* r_grid_real, float* r_grid_imag, fl
 	}
 }
 
+__global__ void fused_gridding(const float* B_in, cufftComplex* r_grid, const float* Vis_real, const float* Vis_imag, float r1r2_scale, size_t grid_size, size_t num_baselines) {
+    const int   KERNEL_SUPPORT_BOUND = 16;
+    const int   support              = 8;
+    const float beta                 = 15.3704324328;
+    const int   half_support         = support / 2;
+    const float inv_half_support     = 1.0f / half_support;
+    const long  grid_min_r1r2        = -(long)grid_size      / 2;
+    const long  grid_max_r1r2        = ((long)grid_size - 1) / 2;
+    const long  origin_offset_r1r2   =  (long)grid_size      / 2;
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(idx < num_baselines){
+        float pos_r1      = B_in[idx*2+0] * r1r2_scale;
+        float pos_r2      = B_in[idx*2+1] * r1r2_scale;
+        long  grid_r1_min = max(ceil_device (pos_r1 - half_support), grid_min_r1r2);
+        long  grid_r1_max = min(floor_device(pos_r1 + half_support), grid_max_r1r2);
+        long  grid_r2_min = max(ceil_device (pos_r2 - half_support), grid_min_r1r2);
+        long  grid_r2_max = min(floor_device(pos_r2 + half_support), grid_max_r1r2);
+        if (grid_r1_min > grid_r1_max || grid_r2_min > grid_r2_max) {
+            return;
+        }
+        float kernel_r1[KERNEL_SUPPORT_BOUND],
+              kernel_r2[KERNEL_SUPPORT_BOUND];
+        for(long grid_r1 = grid_r1_min; grid_r1 <= grid_r1_max; grid_r1++){
+            kernel_r1[grid_r1 - grid_r1_min] = exp_semicircle(beta,(grid_r1 - pos_r1) * inv_half_support);
+        }
+        for(long grid_r2 = grid_r2_min; grid_r2 <= grid_r2_max; grid_r2++){
+            kernel_r2[grid_r2 - grid_r2_min] = exp_semicircle(beta,(grid_r2 - pos_r2) * inv_half_support);
+        }
+        for(long grid_r1 = grid_r1_min; grid_r1 <= grid_r1_max; grid_r1++){
+            for(long grid_r2 = grid_r2_min; grid_r2 <= grid_r2_max; grid_r2++){
+                float kernel_value = kernel_r1[grid_r1 - grid_r1_min] * kernel_r2[grid_r2 - grid_r2_min];
+                if(((grid_r1 + grid_r2) & 1) != 0){
+                    kernel_value = -kernel_value;
+                }
+                const long grid_offset_r1r2r3 = (grid_r1 + origin_offset_r1r2) * (long)grid_size + grid_r2 + origin_offset_r1r2;
+                atomicAdd(&r_grid[grid_offset_r1r2r3].x, Vis_real[idx]*kernel_value);
+                atomicAdd(&r_grid[grid_offset_r1r2r3].y, Vis_imag[idx]*kernel_value);
+            }
+        }
+    }
+}
+
 __global__ void combineToComplex(float* data_real, float* data_imag, cufftComplex* complex_data, size_t grid_size) {
 	size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	size_t size = grid_size * grid_size;
@@ -1243,11 +1287,11 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
             cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
             cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
+            cudaMemsetAsync(r_grid_stack,      0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
             nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
             nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-            gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
-            combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+            fused_gridding     <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
             accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
             scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
@@ -1279,11 +1323,11 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(dirty_pre,         0, image_size * image_size  *sizeof(float), stream1);
     cudaMemsetAsync(r_grid_stack_real, 0, grid_size  * grid_size   *sizeof(float), stream1);
     cudaMemsetAsync(r_grid_stack_imag, 0, grid_size  * grid_size   *sizeof(float), stream1);
+    cudaMemsetAsync(r_grid_stack,      0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
     nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
     nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-    gridding           <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack_real, r_grid_stack_imag, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
-    combineToComplex   <<<Bc, Tc, 0,  stream1>>> (r_grid_stack_real, r_grid_stack_imag, r_grid_stack, grid_size);
+    fused_gridding     <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
     accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
     scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
