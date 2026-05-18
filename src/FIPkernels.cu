@@ -598,6 +598,37 @@ __global__ void fused_p2p(float* output_index,
     }
 }
 
+__global__ void final_interpolation(float*       dirty,
+                                    const float* dirty_pre,
+                                    const float* output_index,
+                                    const size_t image_size,
+                                    const float  inv_num_baselines){
+    const long   half_image_size                 = image_size / 2;
+    const size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
+    dirty += image_index_offset_image_centre;
+
+    if(idx<image_size && idy<image_size){
+        /*                  Transposition   x      <->       y         is intentional below. */
+        const float LL    = output_index[(idx*image_size + idy)*2+0] - half_image_size;
+        const float MM    = output_index[(idx*image_size + idy)*2+1] - half_image_size;
+        const float value = dirty_pre   [(idy*image_size + idx)    ] * inv_num_baselines;
+
+        if(fabs(LL) < half_image_size-1 && fabs(MM)<half_image_size-1){
+            const float LLf = floorf(LL);
+            const float MMf = floorf(MM);
+            const float LLc = ceilf (LL);/* Theoretically LLf+1 except if LL was integer */
+            const float MMc = ceilf (MM);/* Theoretically MMf+1 except if MM was integer */
+
+            atomicAdd(&dirty[(long)MMf * (long)image_size + (long)LLf],  (1-LL+LLf) * (1-MM+MMf) * value);/* Always effective                  */
+            atomicAdd(&dirty[(long)MMc * (long)image_size + (long)LLf],  (1-LL+LLf) * (0+MM-MMf) * value);/* Ineffective when       MM integer */
+            atomicAdd(&dirty[(long)MMf * (long)image_size + (long)LLc],  (0+LL-LLf) * (1-MM+MMf) * value);/* Ineffective when LL       integer */
+            atomicAdd(&dirty[(long)MMc * (long)image_size + (long)LLc],  (0+LL-LLf) * (0+MM-MMf) * value);/* Ineffective when LL or MM integer */
+        }
+    }
+}
+
 __global__ void finalinterp(float* output_index, float* dirty_pre, float* dirty, size_t image_size, size_t num_baselines) {
 	long int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	long int idy = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1348,7 +1379,7 @@ int FIpipe2(float* Visreal,
 
             if(ind == 1 || ind == 2){
                 dirtyp = ind == 1 ? dirty1 : dirty2;
-                finalinterp    <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirtyp, image_size, num_baselines);
+                final_interpolation<<<Bs, Ts, 0,  stream1>>> (dirtyp, dirty_pre, output_index, image_size, 1.0f/num_baselines);
                 nppiMax_32f_C1R_Ctx(dirtyp, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
             }
 
@@ -1381,7 +1412,7 @@ int FIpipe2(float* Visreal,
 
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
-    finalinterp        <<<Bs, Ts, 0,  stream1>>> (output_index, dirty_pre, dirty3, image_size, num_baselines);
+    final_interpolation<<<Bs, Ts, 0,  stream1>>> (dirty3, dirty_pre, output_index, image_size, 1.0f/num_baselines);
     nppiMax_32f_C1R_Ctx(dirty3, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
 
     cudaStreamSynchronize(stream1);
