@@ -264,13 +264,14 @@ __global__ void gridding(float* B_in, float* r_grid_real, float* r_grid_imag, fl
 	}
 }
 
-__global__ void fused_gridding(const float* B_in, cufftComplex* r_grid,
-                               const float* Vis_real,
-                               const float* Vis_imag,
-                               const float  weight,
-                               const float  r1r2_scale,
-                               const size_t grid_size,
-                               const size_t num_baselines){
+__global__ void fused_gridding(cufftComplex* r_grid,
+                               const float*  B_in,
+                               const float*  Vis_real,
+                               const float*  Vis_imag,
+                               const float   weight,
+                               const float   r1r2_scale,
+                               const size_t  grid_size,
+                               const size_t  num_baselines){
     const int   KERNEL_SUPPORT_BOUND = 16;
     const int   support              = 8;
     const float beta                 = 15.3704324328;
@@ -1330,7 +1331,7 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
             cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-            fused_gridding <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+            fused_gridding <<<Bg, Tg, 0, stream1>>> (r_grid_stack, B_in, Vis_real, Vis_imag,
                                                      fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
                                                      r1r2_scale, grid_size, num_baselines);
 
@@ -1366,7 +1367,7 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
     cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-    fused_gridding <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+    fused_gridding <<<Bg, Tg, 0, stream1>>> (r_grid_stack, B_in, Vis_real, Vis_imag,
                                              fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
                                              r1r2_scale, grid_size, num_baselines);
 
