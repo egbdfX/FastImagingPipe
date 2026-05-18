@@ -264,7 +264,13 @@ __global__ void gridding(float* B_in, float* r_grid_real, float* r_grid_imag, fl
 	}
 }
 
-__global__ void fused_gridding(const float* B_in, cufftComplex* r_grid, const float* Vis_real, const float* Vis_imag, float r1r2_scale, size_t grid_size, size_t num_baselines) {
+__global__ void fused_gridding(const float* B_in, cufftComplex* r_grid,
+                               const float* Vis_real,
+                               const float* Vis_imag,
+                               const float  weight,
+                               const float  r1r2_scale,
+                               const size_t grid_size,
+                               const size_t num_baselines){
     const int   KERNEL_SUPPORT_BOUND = 16;
     const int   support              = 8;
     const float beta                 = 15.3704324328;
@@ -301,8 +307,8 @@ __global__ void fused_gridding(const float* B_in, cufftComplex* r_grid, const fl
                     kernel_value = -kernel_value;
                 }
                 const long grid_offset_r1r2r3 = (grid_r1 + origin_offset_r1r2) * (long)grid_size + grid_r2 + origin_offset_r1r2;
-                atomicAdd(&r_grid[grid_offset_r1r2r3].x, Vis_real[idx]*kernel_value);
-                atomicAdd(&r_grid[grid_offset_r1r2r3].y, Vis_imag[idx]*kernel_value);
+                atomicAdd(&r_grid[grid_offset_r1r2r3].x, (Vis_real[idx]/weight)*kernel_value);
+                atomicAdd(&r_grid[grid_offset_r1r2r3].y, (Vis_imag[idx]/weight)*kernel_value);
             }
         }
     }
@@ -1278,15 +1284,17 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
             cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-            nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-            nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-            fused_gridding     <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+            fused_gridding     <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+                                                         fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
+                                                         r1r2_scale, grid_size, num_baselines);
+
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
-            accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
-            scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-            fused_p2p          <<<Bs, Ts, 0,  stream2>>> (output_index, V[0][0], V[0][1],
-                                                                        V[1][0], V[1][1],
-                                                                        V[2][0], V[2][1], V[2][2], cell_size, image_size);
+
+            accumulation       <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
+            scaling            <<<Bs, Ts, 0, stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
+            fused_p2p          <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
+                                                                       V[1][0], V[1][1],
+                                                                       V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
@@ -1312,15 +1320,17 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
     cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-    nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_real, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-    nppiDivC_32f_C1IR_Ctx(fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]), Vis_imag, num_baselines*sizeof(float), (NppiSize){(int)num_baselines, 1}, nppCtx1);
-    fused_gridding     <<<Bg, Tg, 0,  stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag, r1r2_scale, grid_size, num_baselines);
+    fused_gridding     <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+                                                 fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
+                                                 r1r2_scale, grid_size, num_baselines);
+
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
-    accumulation       <<<Bs, Ts, 0,  stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
-    scaling            <<<Bs, Ts, 0,  stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-    fused_p2p          <<<Bs, Ts, 0,  stream2>>> (output_index, V[0][0], V[0][1],
-                                                                V[1][0], V[1][1],
-                                                                V[2][0], V[2][1], V[2][2], cell_size, image_size);
+
+    accumulation       <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
+    scaling            <<<Bs, Ts, 0, stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
+    fused_p2p          <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
+                                                               V[1][0], V[1][1],
+                                                               V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
