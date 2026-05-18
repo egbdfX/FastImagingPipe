@@ -492,18 +492,26 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 	}
 }
 
-__global__ void fused_p2p(float* output_index,
-                          const float  V00, const float V01,
-                          const float  V10, const float V11,
-                          const float  V20, const float V21, const float V22,
-                          const float  dc_rad,
-                          const size_t di){
+__global__ void fused_interpolation(float*       dirty,
+                                    const float* dirty_pre,
+                                    const float  V00, const float V01,
+                                    const float  V10, const float V11,
+                                    const float  V20, const float V21, const float V22,
+                                    const float  dc_rad,
+                                    const size_t di,
+                                    const float  inv_num_baselines){
     const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
-    const float xi   = V20/V22;
-    const float eta  = V21/V22;
-    const float di2  = di*0.5f;
-    const float dc   = dc_rad / M_PI * 180;
+    const float  xi   = V20/V22;
+    const float  eta  = V21/V22;
+    const float  di2  = di*0.5f;
+    const float  dc   = dc_rad / M_PI * 180;
+
+    const long   half_image_size = di/2;
+
+    float        oi0, oi1;
+
+    dirty   +=   half_image_size*di + half_image_size;
 
     if(idx<di && idy<di){
         /**
@@ -525,6 +533,12 @@ __global__ void fused_p2p(float* output_index,
         /**
          * Kernel (ex-)p2p().
          *
+         * Because of fusion, the following no longer needs to be spilled and
+         * reloaded from memory:
+         *
+         * oi0 = output_index[(idx*di+idy)*2+0]
+         * oi1 = output_index[(idx*di+idy)*2+1]
+         *
          * According to paper:
          *     M. R.  Calabretta, E. W.  Greisen, 'Representations of celestial coordinates in FITS,' A&A,395(3),1077-1122,2002.
          */
@@ -537,29 +551,34 @@ __global__ void fused_p2p(float* output_index,
         float y0 = y / r0;
         float r2 = x0 * x0 + y0 * y0;
 
-        float phi;
+        float phi, theta, t, r, w;
         if (r2 != 0.0f){
             phi = __atan2d(x0, -y0);
         }else{
             phi = 0.0f;
         }
 
-        float theta;
         if(r2 < 0.5f){
             theta = __acosd(sqrtf(r2));
         }else if (r2 <= 1.0f){
             theta = __asind(sqrtf(1.0f - r2));
         }else{
             /**
-             * Because of the early return here, we must spill to output_index the values
+             * Because of the early skip here, we must spill to output_index the values
              * that *would* have been present by the legacy coordschange() had it actually
              * run to maintain perfect equivalence.
+             *
+             * Formerly:
+             *
+             *     output_index[(idx*di+idy)*2+0] = p1;
+             *     output_index[(idx*di+idy)*2+1] = p2;
+             *     return;
              */
 
-            output_index[(idx*di+idy)*2+0] = p1;
-            output_index[(idx*di+idy)*2+1] = p2;
+            oi0 = p1;
+            oi1 = p2;
 
-            return;
+            goto interpolate;
         }
 
         float sinphi, cosphi;
@@ -567,7 +586,7 @@ __global__ void fused_p2p(float* output_index,
         x = sinphi;
         y = cosphi;
 
-        float t = (90.0f - fabsf(theta)) / 180.0f * M_PI;
+        t = (90.0f - fabsf(theta)) / 180.0f * M_PI;
         float z, costhe;
         if(t < 1.0e-5f){
             if(theta > 0.0f){
@@ -582,8 +601,8 @@ __global__ void fused_p2p(float* output_index,
         }
 
         r0 = 180.0f / M_PI;
-        float r = r0 * costhe;
-        float w = xi*xi + eta*eta;
+        r = r0 * costhe;
+        w = xi*xi + eta*eta;
 
         if(w == 0.0f){
             x =  r*x;
@@ -593,27 +612,24 @@ __global__ void fused_p2p(float* output_index,
             y = -r*y + z*r0*eta;
         }
 
-        output_index[(idx*di+idy)*2+0] = -x/dc + di2 + 1.0f;
-        output_index[(idx*di+idy)*2+1] =  y/dc + di2 + 1.0f;
-    }
-}
+        oi0 = -x/dc + di2 + 1.0f;
+        oi1 =  y/dc + di2 + 1.0f;
+        interpolate:
 
-__global__ void final_interpolation(float*       dirty,
-                                    const float* dirty_pre,
-                                    const float* output_index,
-                                    const size_t image_size,
-                                    const float  inv_num_baselines){
-    const long   half_image_size                 = image_size / 2;
-    const size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
-    dirty += image_index_offset_image_centre;
 
-    if(idx<image_size && idy<image_size){
-        /*                  Transposition   x      <->       y         is intentional below. */
-        const float LL    = output_index[(idx*image_size + idy)*2+0] - half_image_size;
-        const float MM    = output_index[(idx*image_size + idy)*2+1] - half_image_size;
-        const float value = dirty_pre   [(idy*image_size + idx)    ] * inv_num_baselines;
+        /**
+         * Kernel (ex-)finalinterp().
+         *
+         * Because of fusion, the following no longer needs to be spilled and
+         * reloaded from memory:
+         *
+         * output_index[(idx*di+idy)*2+0] = oi0;
+         * output_index[(idx*di+idy)*2+1] = oi1;
+         */
+
+        const float LL    = oi0 - half_image_size;
+        const float MM    = oi1 - half_image_size;
+        const float value = dirty_pre[(idy*di + idx)] * inv_num_baselines;
 
         if(fabs(LL) < half_image_size-1 && fabs(MM)<half_image_size-1){
             const float LLf = floorf(LL);
@@ -621,10 +637,10 @@ __global__ void final_interpolation(float*       dirty,
             const float LLc = ceilf (LL);/* Theoretically LLf+1 except if LL was integer */
             const float MMc = ceilf (MM);/* Theoretically MMf+1 except if MM was integer */
 
-            atomicAdd(&dirty[(long)MMf * (long)image_size + (long)LLf],  (1-LL+LLf) * (1-MM+MMf) * value);/* Always effective                  */
-            atomicAdd(&dirty[(long)MMc * (long)image_size + (long)LLf],  (1-LL+LLf) * (0+MM-MMf) * value);/* Ineffective when       MM integer */
-            atomicAdd(&dirty[(long)MMf * (long)image_size + (long)LLc],  (0+LL-LLf) * (1-MM+MMf) * value);/* Ineffective when LL       integer */
-            atomicAdd(&dirty[(long)MMc * (long)image_size + (long)LLc],  (0+LL-LLf) * (0+MM-MMf) * value);/* Ineffective when LL or MM integer */
+            atomicAdd(&dirty[(long)MMf * (long)di + (long)LLf],  (1-LL+LLf) * (1-MM+MMf) * value);/* Always effective                  */
+            atomicAdd(&dirty[(long)MMc * (long)di + (long)LLf],  (1-LL+LLf) * (0+MM-MMf) * value);/* Ineffective when       MM integer */
+            atomicAdd(&dirty[(long)MMf * (long)di + (long)LLc],  (0+LL-LLf) * (1-MM+MMf) * value);/* Ineffective when LL       integer */
+            atomicAdd(&dirty[(long)MMc * (long)di + (long)LLc],  (0+LL-LLf) * (0+MM-MMf) * value);/* Ineffective when LL or MM integer */
         }
     }
 }
@@ -1144,7 +1160,7 @@ int FIpipe2(float* Visreal,
     float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
     float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
-    float *dirty_pre, *conv_corr_kernel, *output_index, *max_tmp, *maxall;
+    float *dirty_pre, *conv_corr_kernel, *max_tmp, *maxall;
     float* image_buffer;
     float* Vis_buffer;
     float (*V)[3];
@@ -1256,7 +1272,7 @@ int FIpipe2(float* Visreal,
     /* Consolidated memory allocations and initializations. */
     cudaMalloc((void**)&nppWrkspc1,          nppWrkspc1Sz);
 
-    cudaMalloc((void**)&image_buffer,        6 * image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&image_buffer,        4 * image_size * image_size * sizeof(float));
     cudaMalloc((void**)&r_grid_stack,            grid_size  * grid_size  * sizeof(cufftComplex));
     cudaMalloc((void**)&Vis_buffer,          8 * num_baselines           * sizeof(float));
 
@@ -1272,12 +1288,11 @@ int FIpipe2(float* Visreal,
     memcpy(pinned_Vis_imag, Visimag,         num_baselines *     num_snapshots * sizeof(float));
     memcpy(pinned_B_in,     Bin,             num_baselines * 2 * num_snapshots * sizeof(float));
 
-    cudaMemset(image_buffer,  0,  6*image_size*image_size * sizeof(float));
+    cudaMemset(image_buffer,  0,  4*image_size*image_size * sizeof(float));
     dirty_pre    = image_buffer + 0*image_size*image_size;
     dirty1       = image_buffer + 1*image_size*image_size;
     dirty2       = image_buffer + 2*image_size*image_size;
     dirty3       = image_buffer + 3*image_size*image_size;
-    output_index = image_buffer + 4*image_size*image_size;
 
     Vis_realtmp  = Vis_buffer + 0*num_baselines;
     Vis_imagtmp  = Vis_buffer + 1*num_baselines;
@@ -1370,16 +1385,18 @@ int FIpipe2(float* Visreal,
 
             fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
                                                      conv_corr_norm_factor, image_size, grid_size);
-            fused_p2p      <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
-                                                                   V[1][0], V[1][1],
-                                                                   V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
 
             if(ind == 1 || ind == 2){
                 dirtyp = ind == 1 ? dirty1 : dirty2;
-                final_interpolation<<<Bs, Ts, 0,  stream1>>> (dirtyp, dirty_pre, output_index, image_size, 1.0f/num_baselines);
+                fused_interpolation <<<Bs, Ts, 0,  stream1>>> (dirtyp,
+                                                               dirty_pre,
+                                                               V[0][0], V[0][1],
+                                                               V[1][0], V[1][1],
+                                                               V[2][0], V[2][1], V[2][2],
+                                                               cell_size, image_size, 1.0f/num_baselines);
                 nppiMax_32f_C1R_Ctx(dirtyp, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
             }
 
@@ -1406,13 +1423,15 @@ int FIpipe2(float* Visreal,
 
     fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
                                              conv_corr_norm_factor, image_size, grid_size);
-    fused_p2p      <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
-                                                           V[1][0], V[1][1],
-                                                           V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
-    final_interpolation<<<Bs, Ts, 0,  stream1>>> (dirty3, dirty_pre, output_index, image_size, 1.0f/num_baselines);
+    fused_interpolation <<<Bs, Ts, 0,  stream1>>> (dirty3,
+                                                   dirty_pre,
+                                                   V[0][0], V[0][1],
+                                                   V[1][0], V[1][1],
+                                                   V[2][0], V[2][1], V[2][2],
+                                                   cell_size, image_size, 1.0f/num_baselines);
     nppiMax_32f_C1R_Ctx(dirty3, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
 
     cudaStreamSynchronize(stream1);
