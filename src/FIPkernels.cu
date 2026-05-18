@@ -356,6 +356,52 @@ __global__ void scaling(float* dirty_pre, float* conv_corr_kernel, size_t image_
 	}
 }
 
+__global__ void fused_scaling(float*              dirty_pre,
+                              const cufftComplex* r_grid_stack_shifted,
+                              const float*        conv_corr_kernel,
+                              const float         conv_corr_norm_factor,
+                              const size_t        image_size,
+                              const size_t        grid_size){
+    const size_t half_image_size                 = image_size / 2;
+    const size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
+    const size_t grid_index_offset_image_centre  = grid_size*grid_size/2 + grid_size/2;
+    long int gid, iid;
+    long int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if(idx<image_size && idy<image_size){
+        /**
+         * Kernel (ex-)accumulation().
+         *
+         * This kernel contains a deeply questionable sign-flipping of the pixels that is
+         * probably the compensation of an ifftshift formerly in the codebase.
+         *
+         * Avoid spill and reload by not writing out to memory in this half of the fusion.
+         */
+
+        idx = idx - half_image_size;
+        idy = idy - half_image_size;
+        gid = grid_index_offset_image_centre  + idy * grid_size  + idx;
+        iid = image_index_offset_image_centre + idy * image_size + idx;
+
+        float pixel_sum = r_grid_stack_shifted[gid].x;
+        if (((abs(idx)+abs(idy)) & 1) != 0) {
+            pixel_sum = - pixel_sum;
+        }
+
+
+        /**
+         * Kernel (ex-)scaling().
+         *
+         * Avoid spill and reload by using pixel_sum directly from the registers.
+         */
+
+        pixel_sum     *= 1 / (conv_corr_kernel[abs(idx)] * conv_corr_kernel[abs(idy)] *
+                              conv_corr_norm_factor      * conv_corr_norm_factor);
+        dirty_pre[iid] = fabs(pixel_sum);
+    }
+}
+
 __global__ void coordschange(float* output_index, float* V_in, size_t image_size) {
 	size_t half_image_size = image_size / 2;
 
@@ -1284,17 +1330,17 @@ int FIpipe2(float* Visreal,
             cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
             cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-            fused_gridding     <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
-                                                         fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
-                                                         r1r2_scale, grid_size, num_baselines);
+            fused_gridding <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+                                                     fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
+                                                     r1r2_scale, grid_size, num_baselines);
 
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
 
-            accumulation       <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
-            scaling            <<<Bs, Ts, 0, stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-            fused_p2p          <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
-                                                                       V[1][0], V[1][1],
-                                                                       V[2][0], V[2][1], V[2][2], cell_size, image_size);
+            fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
+                                                     conv_corr_norm_factor, image_size, grid_size);
+            fused_p2p      <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
+                                                                   V[1][0], V[1][1],
+                                                                   V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
@@ -1320,17 +1366,17 @@ int FIpipe2(float* Visreal,
     cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
     cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
-    fused_gridding     <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
-                                                 fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
-                                                 r1r2_scale, grid_size, num_baselines);
+    fused_gridding <<<Bg, Tg, 0, stream1>>> (B_in, r_grid_stack, Vis_real, Vis_imag,
+                                             fabsf(V[0][0]*V[1][1] - V[0][1]*V[1][0]),
+                                             r1r2_scale, grid_size, num_baselines);
 
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
 
-    accumulation       <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack,       image_size, grid_size);
-    scaling            <<<Bs, Ts, 0, stream1>>> (dirty_pre, conv_corr_kernel,   image_size, conv_corr_norm_factor);
-    fused_p2p          <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
-                                                               V[1][0], V[1][1],
-                                                               V[2][0], V[2][1], V[2][2], cell_size, image_size);
+    fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
+                                             conv_corr_norm_factor, image_size, grid_size);
+    fused_p2p      <<<Bs, Ts, 0, stream2>>> (output_index, V[0][0], V[0][1],
+                                                           V[1][0], V[1][1],
+                                                           V[2][0], V[2][1], V[2][2], cell_size, image_size);
 
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
