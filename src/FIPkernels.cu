@@ -1156,7 +1156,7 @@ int FIpipe2(float* Visreal,
     float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
     float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
-    float *dirty_pre, *conv_corr_kernel, *max_tmp, *maxall;
+    float *conv_corr_kernel, *maxall;
     float* image_buffer;
     float* Vis_buffer;
     float (*V)[3];
@@ -1171,9 +1171,7 @@ int FIpipe2(float* Visreal,
 
     const size_t num_events  = num_snapshots>3 ? num_snapshots : 3;
     const size_t unit_num    = image_size/unit_size;
-    const size_t region_num  = 32;
-    const size_t region_size = ceiling_divide(image_size, region_num);
-    const size_t grid_size   = ceiling_divide(image_size*3,        2); // * 1.5, rounding up
+    const size_t grid_size   = ceiling_divide(image_size*3, 2); // * 1.5, rounding up
 
     const float r1r2_scale   = cell_size*grid_size;
     const float conv_corr_norm_factor = 2.4937047051153827;
@@ -1273,7 +1271,6 @@ int FIpipe2(float* Visreal,
     cudaMalloc((void**)&Vis_buffer,          8 * num_baselines           * sizeof(float));
 
     cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)             * sizeof(float));
-    cudaMalloc((void**)&max_tmp,             region_num * region_num     * sizeof(float));
     cudaMalloc((void**)&maxall,              3                           * sizeof(float));
     cudaMalloc((void**)&V_intmp,             3 * 3                       * sizeof(float));
 
@@ -1285,7 +1282,6 @@ int FIpipe2(float* Visreal,
     memcpy(pinned_B_in,     Bin,             num_baselines * 2 * num_snapshots * sizeof(float));
 
     cudaMemset(image_buffer,  0,  4*image_size*image_size * sizeof(float));
-    dirty_pre    = image_buffer + 0*image_size*image_size;
     dirty1       = image_buffer + 1*image_size*image_size;
     dirty2       = image_buffer + 2*image_size*image_size;
     dirty3       = image_buffer + 3*image_size*image_size;
@@ -1370,7 +1366,6 @@ int FIpipe2(float* Visreal,
             cudaStreamWaitEvent(stream1, events[ind-1], 0);
             cudaStreamWaitEvent(stream2, events[ind-1], 0);
 
-            cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
             cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
             fused_gridding <<<Bg, Tg, 0, stream1>>> (r_grid_stack, B_in, Vis_real, Vis_imag,
@@ -1408,7 +1403,6 @@ int FIpipe2(float* Visreal,
     cudaStreamWaitEvent(stream1, events[ind-1], 0);
     cudaStreamWaitEvent(stream2, events[ind-1], 0);
 
-    cudaMemsetAsync(dirty_pre,    0, image_size * image_size  *sizeof(float),        stream1);
     cudaMemsetAsync(r_grid_stack, 0, grid_size  * grid_size   *sizeof(cufftComplex), stream1);
 
     fused_gridding <<<Bg, Tg, 0, stream1>>> (r_grid_stack, B_in, Vis_real, Vis_imag,
@@ -1459,7 +1453,6 @@ int FIpipe2(float* Visreal,
     cudaFree(r_grid_stack);
     cudaFree(Vis_buffer);
     cudaFree(conv_corr_kernel);
-    cudaFree(max_tmp);
     cudaFree(V_intmp);
 
     cudaFreeHost(pinned_Vis_real);
