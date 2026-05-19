@@ -357,52 +357,6 @@ __global__ void scaling(float* dirty_pre, float* conv_corr_kernel, size_t image_
 	}
 }
 
-__global__ void fused_scaling(float*              dirty_pre,
-                              const cufftComplex* r_grid_stack_shifted,
-                              const float*        conv_corr_kernel,
-                              const float         conv_corr_norm_factor,
-                              const size_t        image_size,
-                              const size_t        grid_size){
-    const size_t half_image_size                 = image_size / 2;
-    const size_t image_index_offset_image_centre = half_image_size*image_size + half_image_size;
-    const size_t grid_index_offset_image_centre  = grid_size*grid_size/2 + grid_size/2;
-    long int gid, iid;
-    long int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    long int idy = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if(idx<image_size && idy<image_size){
-        /**
-         * Kernel (ex-)accumulation().
-         *
-         * This kernel contains a deeply questionable sign-flipping of the pixels that is
-         * probably the compensation of an ifftshift formerly in the codebase.
-         *
-         * Avoid spill and reload by not writing out to memory in this half of the fusion.
-         */
-
-        idx = idx - half_image_size;
-        idy = idy - half_image_size;
-        gid = grid_index_offset_image_centre  + idy * grid_size  + idx;
-        iid = image_index_offset_image_centre + idy * image_size + idx;
-
-        float pixel_sum = r_grid_stack_shifted[gid].x;
-        if (((abs(idx)+abs(idy)) & 1) != 0) {
-            pixel_sum = - pixel_sum;
-        }
-
-
-        /**
-         * Kernel (ex-)scaling().
-         *
-         * Avoid spill and reload by using pixel_sum directly from the registers.
-         */
-
-        pixel_sum     *= 1 / (conv_corr_kernel[abs(idx)] * conv_corr_kernel[abs(idy)] *
-                              conv_corr_norm_factor      * conv_corr_norm_factor);
-        dirty_pre[iid] = fabs(pixel_sum);
-    }
-}
-
 __global__ void coordschange(float* output_index, float* V_in, size_t image_size) {
 	size_t half_image_size = image_size / 2;
 
@@ -493,23 +447,31 @@ __global__ void p2p(float* output_index, float* V_in, float dc, size_t di) {
 }
 
 __global__ void fused_interpolation(float*       dirty,
-                                    const float* dirty_pre,
+                                    const cufftComplex* r_grid_stack,
                                     const float  V00, const float V01,
                                     const float  V10, const float V11,
                                     const float  V20, const float V21, const float V22,
                                     const float  dc_rad,
                                     const size_t di,
+                                    const size_t gi,
+                                    const float* conv_corr_kernel,
+                                    const float  conv_corr_norm_factor,
                                     const float  inv_num_baselines){
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const size_t idy = blockIdx.y * blockDim.y + threadIdx.y;
+    const size_t idx  = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t idy  = blockIdx.y * blockDim.y + threadIdx.y;
+    const long   half_image_size = di/2;
+    const float  di2  = di*0.5f;
+    const float  idxf =       idx - di2;             /* Reduced by half image size. Float */
+    const float  idyf =       idy - di2;             /* Reduced by half image size. Float */
+    const long   idxr = (long)idx - half_image_size; /* Reduced by half image size. Integer */
+    const long   idyr = (long)idy - half_image_size; /* Reduced by half image size. Integer */
+    const float  dc   = dc_rad / M_PI * 180;
     const float  xi   = V20/V22;
     const float  eta  = V21/V22;
-    const float  di2  = di*0.5f;
-    const float  dc   = dc_rad / M_PI * 180;
 
-    const long   half_image_size = di/2;
 
-    float        oi0, oi1;
+    float        oi0, oi1;                           /* (ex-) output_index[k+0], output_index[k+1] */
+    float        pixel_sum;                          /* (ex-) dirty_pre[idy*di + idx] */
 
     dirty   +=   half_image_size*di + half_image_size;
 
@@ -526,8 +488,8 @@ __global__ void fused_interpolation(float*       dirty,
          *    = ( -V[0][1]*(idx-di2) + V[1][1]*(idy-di2) ) / fabs(V[2][2]) + di2
          */
 
-        const float p1 = (-V00*(idx-di2) + V10*(idy-di2)) / fabsf(V22) + di2;
-        const float p2 = (-V01*(idx-di2) + V11*(idy-di2)) / fabsf(V22) + di2;
+        const float p1 = (-V00*idxf + V10*idyf) / fabsf(V22) + di2;
+        const float p2 = (-V01*idxf + V11*idyf) / fabsf(V22) + di2;
 
 
         /**
@@ -618,6 +580,39 @@ __global__ void fused_interpolation(float*       dirty,
 
 
         /**
+         * Kernel (ex-)accumulation().
+         *
+         * This kernel contains a deeply questionable sign-flipping of the pixels that is
+         * probably the compensation of an ifftshift formerly in the codebase.
+         *
+         * Avoid spill and reload by not writing out to memory in this part of the fusion.
+         */
+
+        pixel_sum = r_grid_stack[gi*gi/2 + gi/2 + idyr*(long)gi + idxr].x;
+        if(idxr+idyr & 1){
+            pixel_sum = - pixel_sum;
+        }
+
+
+        /**
+         * Kernel (ex-)scaling().
+         *
+         * Avoid spill and reload by using pixel_sum directly from the registers.
+         *
+         * Because of fusion, the following no longer needs to be spilled and
+         * reloaded from memory:
+         *
+         * dirty_pre[idy*di + idx] = fabs(pixel_sum);
+         */
+
+        pixel_sum *= 1 / (conv_corr_kernel[abs(idxr)] *
+                          conv_corr_kernel[abs(idyr)] *
+                          conv_corr_norm_factor       *
+                          conv_corr_norm_factor);
+        pixel_sum  = fabs(pixel_sum);
+
+
+        /**
          * Kernel (ex-)finalinterp().
          *
          * Because of fusion, the following no longer needs to be spilled and
@@ -625,11 +620,12 @@ __global__ void fused_interpolation(float*       dirty,
          *
          * output_index[(idx*di+idy)*2+0] = oi0;
          * output_index[(idx*di+idy)*2+1] = oi1;
+         * dirty_pre[idy*di + idx] = fabs(pixel_sum);
          */
 
         const float LL    = oi0 - half_image_size;
         const float MM    = oi1 - half_image_size;
-        const float value = dirty_pre[(idy*di + idx)] * inv_num_baselines;
+        const float value = pixel_sum * inv_num_baselines;
 
         if(fabs(LL) < half_image_size-1 && fabs(MM)<half_image_size-1){
             const float LLf = floorf(LL);
@@ -1383,20 +1379,20 @@ int FIpipe2(float* Visreal,
 
             cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
 
-            fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
-                                                     conv_corr_norm_factor, image_size, grid_size);
-
             cudaEventRecord    (eventstream[ind-1], stream2);
             cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
 
             if(ind == 1 || ind == 2){
                 dirtyp = ind == 1 ? dirty1 : dirty2;
                 fused_interpolation <<<Bs, Ts, 0,  stream1>>> (dirtyp,
-                                                               dirty_pre,
+                                                               r_grid_stack,
                                                                V[0][0], V[0][1],
                                                                V[1][0], V[1][1],
                                                                V[2][0], V[2][1], V[2][2],
-                                                               cell_size, image_size, 1.0f/num_baselines);
+                                                               cell_size, image_size, grid_size,
+                                                               conv_corr_kernel,
+                                                               conv_corr_norm_factor,
+                                                               1.0f/num_baselines);
                 nppiMax_32f_C1R_Ctx(dirtyp, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
             }
 
@@ -1421,17 +1417,17 @@ int FIpipe2(float* Visreal,
 
     cufftExecC2C(plan, r_grid_stack, r_grid_stack, CUFFT_INVERSE);
 
-    fused_scaling  <<<Bs, Ts, 0, stream1>>> (dirty_pre, r_grid_stack, conv_corr_kernel,
-                                             conv_corr_norm_factor, image_size, grid_size);
-
     cudaEventRecord    (eventstream[ind-1], stream2);
     cudaStreamWaitEvent(stream1, eventstream[ind-1], 0);
     fused_interpolation <<<Bs, Ts, 0,  stream1>>> (dirty3,
-                                                   dirty_pre,
+                                                   r_grid_stack,
                                                    V[0][0], V[0][1],
                                                    V[1][0], V[1][1],
                                                    V[2][0], V[2][1], V[2][2],
-                                                   cell_size, image_size, 1.0f/num_baselines);
+                                                   cell_size, image_size, grid_size,
+                                                   conv_corr_kernel,
+                                                   conv_corr_norm_factor,
+                                                   1.0f/num_baselines);
     nppiMax_32f_C1R_Ctx(dirty3, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
 
     cudaStreamSynchronize(stream1);
