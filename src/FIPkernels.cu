@@ -1153,7 +1153,7 @@ int FIpipe2(float* Visreal,
             float  cell_size,
             size_t unit_size){
     float *Vis_real, *Vis_imag, *B_in;
-    float *Vis_realtmp, *Vis_imagtmp, *B_intmp, *V_intmp;
+    float *Vis_realtmp, *Vis_imagtmp, *B_intmp;
     float *pinned_Vis_real, *pinned_Vis_imag, *pinned_B_in;
     float *dirty1, *dirty2, *dirty3, *dirtyp;
     float *conv_corr_kernel, *maxall;
@@ -1272,7 +1272,6 @@ int FIpipe2(float* Visreal,
 
     cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)             * sizeof(float));
     cudaMalloc((void**)&maxall,              3                           * sizeof(float));
-    cudaMalloc((void**)&V_intmp,             3 * 3                       * sizeof(float));
 
     cudaMallocHost((void**)&pinned_Vis_real, num_baselines *     num_snapshots * sizeof(float));
     cudaMallocHost((void**)&pinned_Vis_imag, num_baselines *     num_snapshots * sizeof(float));
@@ -1453,7 +1452,6 @@ int FIpipe2(float* Visreal,
     cudaFree(r_grid_stack);
     cudaFree(Vis_buffer);
     cudaFree(conv_corr_kernel);
-    cudaFree(V_intmp);
 
     cudaFreeHost(pinned_Vis_real);
     cudaFreeHost(pinned_Vis_imag);
