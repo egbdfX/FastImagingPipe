@@ -817,6 +817,67 @@ __global__ void tlisi(float* diff_out, float* snap, float* result, size_t unit_s
 	}
 }
 
+__global__ void tlisi2(float* result,
+                       const float* diff_out,
+                       const float* snap,
+                       const size_t unit_size,
+                       const size_t ima,
+                       const size_t unit_num,
+                       const float* maxall){
+    extern  __shared__  float sharedNumDen[];
+
+    const float  maxallval = max(maxall[0], max(maxall[1], maxall[2]));
+    const size_t bid       = blockIdx.x; // tile index
+    const size_t tid       = threadIdx.x;
+
+    const size_t i_id      = bid / unit_num;
+    const size_t j_id      = bid % unit_num;
+    const size_t factor    = (size_t)ceil_device((float)(unit_size * unit_size)/1024.0f);
+
+    for(size_t f=0; f<factor; f++){
+        if(tid+f*1024 < unit_size*unit_size){
+            if(f == 0){
+                sharedNumDen[tid+   0] = 0; /* Sum of diff_out */
+                sharedNumDen[tid+1024] = 0; /* Max of diff_out */
+                sharedNumDen[tid+2048] = 0; /* Sum of r        */
+            }
+            size_t rows = (tid + f*1024) / unit_size;
+            size_t cols = (tid + f*1024) % unit_size;
+
+            size_t I_id = i_id * unit_size + rows;
+            size_t J_id = j_id * unit_size + cols;
+
+            sharedNumDen[tid+   0] =     sharedNumDen[tid+   0] + diff_out[I_id * ima + J_id];
+            sharedNumDen[tid+1024] = max(sharedNumDen[tid+1024],  diff_out[I_id * ima + J_id]);
+            sharedNumDen[tid+2048] =                             (diff_out[I_id * ima + J_id] / snap[I_id * ima + J_id] < 1) ?
+                                         sharedNumDen[tid+2048] + diff_out[I_id * ima + J_id] / snap[I_id * ima + J_id] :
+                                         sharedNumDen[tid+2048] + 1;
+        }else{
+            if(f == 0){
+                sharedNumDen[tid+   0] = 0; /* Sum of diff_out */
+                sharedNumDen[tid+1024] = 0; /* Max of diff_out */
+                sharedNumDen[tid+2048] = 0; /* Sum of r        */
+            }
+        }
+    }
+
+    for(size_t d = blockDim.x/2; d>0; d/=2){
+        __syncthreads();
+        if(tid<d){
+            sharedNumDen[tid+   0] +=     sharedNumDen[tid+d];
+            sharedNumDen[tid+1024]  = max(sharedNumDen[tid+1024],
+                                          sharedNumDen[tid+1024+d]);
+            sharedNumDen[tid+2048] +=     sharedNumDen[tid+2048+d];
+        }
+    }
+
+    if(tid==0){
+        result[bid] = 1 - (sharedNumDen[0   ]/unit_size/unit_size) *
+                           sharedNumDen[1024]                      *
+                          (sharedNumDen[2048]/unit_size/unit_size) / maxallval / maxallval;
+    }
+}
+
 int FIpipe(float* Visreal, float* Visimag, float* Bin, float* Vin, 
            float* result_array,
            size_t num_baselines, size_t image_size, size_t num_snapshots,
@@ -1492,7 +1553,7 @@ int FIpipe2(float* Visreal,
                                     d_data_2, image_size*sizeof(float),
                                     diff_out, image_size*sizeof(float),
                                     nppImageSize,          nppCtxt);
-    tlisi <<<Bt, Tt, St>>> (diff_out, dirty2, result_data, unit_size, image_size, unit_num, maxall);
+    tlisi2 <<<Bt, Tt, St>>> (result_data, diff_out, dirty2, unit_size, image_size, unit_num, maxall);
 
     /* ****************************************************** */
     cudaEventRecord(stop1);
