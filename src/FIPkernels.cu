@@ -74,68 +74,6 @@ __device__ float exp_semicircle(const float beta, float x){
 	return ((xx > float(1.0)) ? float(0.0) : exp(beta*(sqrt(float(1.0) - xx) - float(1.0))));
 }
 
-__device__ void __sincosd(float angle, float &s, float &c) {
-	// angle in degrees
-	if (fmod(angle, 90.0f) == 0) {
-		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f + 0.5f))) % 4;
-		switch (i) {
-			case 0:
-				s = 0.0f;
-				c = 1.0f;
-				break;
-			case 1:
-				s = (angle > 0.0f) ? 1.0f : -1.0f;
-				c = 0.0f;
-				break;
-			case 2:
-				s = 0.0f;
-				c = -1.0f;
-				break;
-			default:
-				s = (angle > 0.0f) ? -1.0f : 1.0f;
-				c = 0.0f;
-				break;
-		}
-	} else {
-		s = sinf(angle * M_PI / 180.0f);
-		c = cosf(angle * M_PI / 180.0f);
-	}
-}
-
-__device__ float __sind(float angle) {
-	// angle in degrees
-	if (fmod(angle, 90.0f) == 0) {
-		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f - 0.5f))) % 4;
-		switch (i) {
-			case 0:
-				return 1.0f;
-			case 2:
-				return -1.0f;
-			default:
-				return 0.0f;
-		}
-	} else {
-		return sinf(angle * M_PI / 180.0f);
-	}
-}
-
-__device__ float __cosd(float angle) {
-	// angle in degrees
-	if (fmod(angle, 90.0f) == 0) {
-		int i = static_cast<int>(fabsf(floor_device(angle / 90.0f + 0.5f))) % 4;
-		switch (i) {
-			case 0:
-				return 1.0f;
-			case 2:
-				return -1.0f;
-			default:
-				return 0.0f;
-		}
-	} else {
-		return cosf(angle * M_PI / 180.0f);
-	}
-}
-
 __device__ float __atan2d(float y, float x) {
 	if (y == 0.0f) {
 		return (x >= 0.0f) ? 0.0f : 180.0f;
@@ -303,7 +241,7 @@ __global__ void fused_interpolation(float*       dirty,
         float y0 = y / r0;
         float r2 = x0 * x0 + y0 * y0;
 
-        float phi, theta, t, r, w;
+        float phi, theta, r, w;
         if (r2 != 0.0f){
             phi = __atan2d(x0, -y0);
         }else{
@@ -333,24 +271,10 @@ __global__ void fused_interpolation(float*       dirty,
             goto interpolate;
         }
 
-        float sinphi, cosphi;
-        __sincosd(phi, sinphi, cosphi);
-        x = sinphi;
-        y = cosphi;
-
-        t = (90.0f - fabsf(theta)) / 180.0f * M_PI;
         float z, costhe;
-        if(t < 1.0e-5f){
-            if(theta > 0.0f){
-                z =        t*t*0.5f;
-            }else{
-                z = 2.0f - t*t*0.5f;
-            }
-            costhe = t;
-        }else{
-            z      = 1.0f - __sind(theta);
-            costhe =        __cosd(theta);
-        }
+        sincospif(fmodf(phi,   360.0f) / 180.0f, &x, &y);
+        sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
+        z = 1.0f - z;
 
         r0 = 180.0f / M_PI;
         r = r0 * costhe;
