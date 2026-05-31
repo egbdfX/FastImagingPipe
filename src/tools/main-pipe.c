@@ -124,7 +124,7 @@ int main_pipe(int argc, char* argv[]) {
 
     FIpipe2(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
 
-    long naxes[2] = {unit_size, unit_size};
+    long naxes[2] = {unit_num, unit_num};
     int status = write_fits_image(output_name, result_array, naxes);
     if (status) {
         fprintf(stderr, "Error writing FITS image\n");
