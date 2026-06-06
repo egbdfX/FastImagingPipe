@@ -264,8 +264,38 @@ __global__ void fused_interpolation(float*       dirty,
             y  = 1.0f;
         }
 
-        if(r2 <= 1.0f){
-            if(r2 < 0.5f){
+        /**
+         * The original conditionals were
+         *
+         *     float x0 = x / r0;
+         *     float y0 = y / r0;
+         *     float r2 = x0 * x0 + y0 * y0;
+         *
+         *     if(r2 < 0.5f){
+         *         A
+         *     }else if(r2 <= 1.0f){
+         *         B
+         *     }else{
+         *
+         * Manipulating the equations,
+         *
+         *     r2 = x0 * x0 + y0 * y0
+         *        = (x/r0)**2 + (y/r0)**2
+         *        = (x**2 + y**2)   / r0**2
+         *        = hypotf(x, y)**2 / r0**2
+         *        = h**2 / r0**2
+         *
+         * we find the conditionals are equivalent to
+         *
+         *     if(h*h/r0/r0 < 0.5f){                  if(h*h < r0*r0*0.5f){                  if(h < r0*sqrtf(0.5f)){
+         *         A                                      A                                      A
+         *     }else if(h*h/r0/r0 <= 1.0f){    ==>    }else if(h*h <= r0*r0*1.0f){    ==>    }else if(h <= r0){
+         *         B                                      B                                      B
+         *     }else{                                 }else{                                 }else{
+         */
+
+        if(h <= r0){
+            if(h < r0*sqrtf(0.5f)){
                 theta = __acosd(sqrtf(r2));
             }else{
                 theta = __asind(sqrtf(1.0f - r2));
