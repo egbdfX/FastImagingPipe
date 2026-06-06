@@ -236,16 +236,32 @@ __global__ void fused_interpolation(float*       dirty,
 
         float x  = -dc * (p1 - (di2 + 1.0f));
         float y  =  dc * (p2 - (di2 + 1.0f));
+        float h  = hypotf(x, y);
 
         float x0 = x / r0;
         float y0 = y / r0;
         float r2 = x0 * x0 + y0 * y0;
 
-        float phi, theta, r, w;
-        if (r2 != 0.0f){
-            phi = __atan2d(x0, -y0);
+        float theta, r, w;
+        if(h != 0.0f){
+            /**
+             * Optimize sincosf(atan2f(x, -y), &x, &y) into x/=h, y/=-h.
+             *
+             * Example inputs and comparisons:
+             *
+             *    Input   | atan2f(x, -y) | sincosf(atan2f(x, -y), &x, &y) |  x/=h, y/=-h
+             * -----------+---------------+--------------------------------+--------------
+             * x=1,  y=0  |      pi/2     |           x=1,  y=0            |  x=1,  y=0
+             * x=0,  y=1  |      pi       |           x=0,  y=-1           |  x=0,  y=-1
+             * x=-1, y=0  |    3*pi/2     |           x=-1, y=0            |  x=-1, y=0
+             * x=0,  y=-1 |      0        |           x=0,  y=1            |  x=0,  y=1
+             */
+
+            x /=  h;
+            y /= -h;
         }else{
-            phi = 0.0f;
+            x  = 0.0f;
+            y  = 1.0f;
         }
 
         if(r2 <= 1.0f){
@@ -256,7 +272,6 @@ __global__ void fused_interpolation(float*       dirty,
             }
 
             float z, costhe;
-            sincospif(fmodf(phi,   360.0f) / 180.0f, &x, &y);
             sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
             z = 1.0f - z;
 
