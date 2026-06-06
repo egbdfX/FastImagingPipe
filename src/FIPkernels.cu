@@ -74,40 +74,6 @@ __device__ float exp_semicircle(const float beta, float x){
 	return ((xx > float(1.0)) ? float(0.0) : exp(beta*(sqrt(float(1.0) - xx) - float(1.0))));
 }
 
-__device__ float __atan2d(float y, float x) {
-	if (y == 0.0f) {
-		return (x >= 0.0f) ? 0.0f : 180.0f;
-	} else if (x == 0.0f) {
-		return (y > 0.0f) ? 90.0f : -90.0f;
-	} else {
-		return atan2f(y, x) * 180.0f / M_PI;
-	}
-}
-
-__device__ float __acosd(float v) {
-	if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
-		return 0.0f;
-	} else if (v == 0.0f) {
-		return 90.0f;
-	} else if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
-		return 180.0f;
-	} else {
-		return acosf(v) * 180.0f / M_PI;
-	}
-}
-
-__device__ float __asind(float v) {
-	if (v <= -1.0f && v + 1.0f > -WCSTRIG_TOL) {
-		return -90.0f;
-	} else if (v == 0.0f) {
-		return 0.0f;
-	} else if (v >= 1.0f && v - 1.0f < WCSTRIG_TOL) {
-		return 90.0f;
-	} else {
-		return asinf(v) * 180.0f / M_PI;
-	}
-}
-
 __global__ void convolveKernel(float *conv_corr_kernel, size_t image_size, size_t grid_size, float conv_corr_norm_factor) {
 	const int support = 8;
 	size_t t1_t2 = blockIdx.x * blockDim.x + threadIdx.x;
@@ -234,15 +200,12 @@ __global__ void fused_interpolation(float*       dirty,
          *     M. R.  Calabretta, E. W.  Greisen, 'Representations of celestial coordinates in FITS,' A&A,395(3),1077-1122,2002.
          */
 
-        float x  = -dc * (p1 - (di2 + 1.0f));
-        float y  =  dc * (p2 - (di2 + 1.0f));
-        float h  = hypotf(x, y);
+        float x   = -dc * (p1 - (di2 + 1.0f));
+        float y   =  dc * (p2 - (di2 + 1.0f));
+        float h   = hypotf(x, y);
+        float hr0 = h/r0;
 
-        float x0 = x / r0;
-        float y0 = y / r0;
-        float r2 = x0 * x0 + y0 * y0;
-
-        float theta, r, w;
+        float r, w, z;
         if(h != 0.0f){
             /**
              * Optimize sincosf(atan2f(x, -y), &x, &y) into x/=h, y/=-h.
@@ -295,19 +258,79 @@ __global__ void fused_interpolation(float*       dirty,
          */
 
         if(h <= r0){
+            /**
+             * Convert numerical expressions from the original into saner ones.
+             *
+             * An angle theta was originally calculated from one of two formulas,
+             *
+             *     theta = { acosf(sqrtf(r2))        ,        r2 <  0.5
+             *             { asinf(sqrtf(1.0 - r2))  , 0.5 <= r2 <= 1.0
+             *
+             * Presumably for numerical reasons (sin^2 x = 1.0 - cos^2 x).
+             * But the angle's sine and cosine were then immediately calculated.
+             * That calls into question the utility of the foregoing.
+             *
+             * -------------------
+             * COSTHE
+             *
+             *     Reformulate as follows:
+             *
+             *         costhe = cosf(theta)
+             *                = cosf(acosf(sqrtf(r2)))
+             *                = sqrtf(r2)
+             *                = sqrtf(x0 * x0 + y0 * y0)
+             *                = hypotf(x0, y0)
+             *                = h/r0
+             *
+             *     As the only subsequent usage of costhe is
+             *
+             *              r = r0 * costhe
+             *
+             *     We may cancel even that usage:
+             *
+             *              r = r0 * costhe
+             *                = r0 * h/r0
+             *                = h
+             *
+             * -------------------
+             * Z
+             *
+             *     z is immediately subtracted from 1.0. To preserve numerical stability,
+             *     special handling should be undertaken knowing that downstream operation.
+             *     We present the straightforward analysis and the one considering the 1.0-z
+             *     subtraction:
+             *
+             *              z = sinf(theta)
+             *                = sinf(asinf(sqrtf(1.0f - r2)))
+             *                = sqrtf(1.0f - r2)
+             *
+             *       1.0f - z = 1.0f - sqrtf(1.0f - r2)
+             *
+             *     This is stable as r2 -> 1 because the result approaches 1, and unstable as
+             *     r2 -> 0 because the result also approaches 0, but all precision is lost due
+             *     to catastrophic cancellation. Thus, rewrite as follows:
+             *
+             *       1.0f - z =  1.0f - sqrtf(1.0f - r2)
+             *                = (1.0f - sqrtf(1.0f - r2)) * (1.0f + sqrtf(1.0f - r2)) / (1.0f + sqrtf(1.0f - r2))
+             *                = (1.0f - (sqrtf(1.0f - r2)))^2) / (1.0f + sqrtf(1.0f - r2))
+             *                = (1.0f - (1.0f - r2)) / (1.0f + sqrtf(1.0f - r2))
+             *                = r2 / (1.0f + sqrtf(1.0f - r2))
+             *
+             *     Let hr0 = h/r0, then r2 = hr0*hr0
+             *
+             *                = hr0*hr0 / (1.0f + sqrtf(1.0f - hr0*hr0))
+             *
+             *     which safely and accurately approaches 0 as hr0 -> 0 (equivalently, as h and r2 -> 0).
+             */
+
+            r = h;
             if(h < r0*sqrtf(0.5f)){
-                theta = __acosd(sqrtf(r2));
+                z =            1.0f - sqrtf(1.0f - hr0*hr0);
             }else{
-                theta = __asind(sqrtf(1.0f - r2));
+                z = hr0*hr0 / (1.0f + sqrtf(1.0f - hr0*hr0));
             }
 
-            float z, costhe;
-            sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
-            z = 1.0f - z;
-
-            r = r0 * costhe;
             w = xi*xi + eta*eta;
-
             if(w == 0.0f){
                 x =  r*x;
                 y = -r*y;
