@@ -4,7 +4,7 @@
 #include <errno.h>
 
 #include <popt.h>
-#include <cfitsio/fitsio.h>
+#include <fitsio.h>
 
 #include "utils.h"
 
