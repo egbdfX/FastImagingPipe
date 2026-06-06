@@ -193,6 +193,7 @@ __global__ void fused_interpolation(float*       dirty,
     const float  idyf =       idy - di2;             /* Reduced by half image size. Float */
     const long   idxr = (long)idx - half_image_size; /* Reduced by half image size. Integer */
     const long   idyr = (long)idy - half_image_size; /* Reduced by half image size. Integer */
+    const float  r0   = 180.0f / M_PI;
     const float  dc   = dc_rad / M_PI * 180;
     const float  xi   = V20/V22;
     const float  eta  = V21/V22;
@@ -236,7 +237,6 @@ __global__ void fused_interpolation(float*       dirty,
         float x  = -dc * (p1 - (di2 + 1.0f));
         float y  =  dc * (p2 - (di2 + 1.0f));
 
-        float r0 = 180.0f / M_PI;
         float x0 = x / r0;
         float y0 = y / r0;
         float r2 = x0 * x0 + y0 * y0;
@@ -276,7 +276,6 @@ __global__ void fused_interpolation(float*       dirty,
         sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
         z = 1.0f - z;
 
-        r0 = 180.0f / M_PI;
         r = r0 * costhe;
         w = xi*xi + eta*eta;
 
