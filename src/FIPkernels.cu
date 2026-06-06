@@ -52,10 +52,9 @@ __constant__ float quadrature_kernel[14] = {
 	8.10934691e-01,9.76937533e-01
 };
 
-__device__ float exp_semicircle(const float beta, float x){
-	const float xx = x*x;
-    
-	return ((xx > float(1.0)) ? float(0.0) : exp(beta*(sqrt(float(1.0) - xx) - float(1.0))));
+__device__ float exp_semicircle(const float beta, const float x){
+    const float xx = x*x;
+    return xx > 1.0f ? 0.0f : expf(beta*(sqrtf(1.0f - xx) - 1.0f));
 }
 
 __global__ void convolveKernel(float *conv_corr_kernel, size_t image_size, size_t grid_size, float conv_corr_norm_factor) {
