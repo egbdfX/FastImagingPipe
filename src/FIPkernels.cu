@@ -30,8 +30,6 @@
 # endif
 #endif
 
-#define WCSTRIG_TOL 1e-10
-
 
 /* The gridding kernels are developed based on SKA SDP (https://gitlab.com/ska-telescope/sdp/ska-sdp-func). */
 
