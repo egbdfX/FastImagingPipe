@@ -52,22 +52,6 @@ __constant__ float quadrature_kernel[14] = {
 	8.10934691e-01,9.76937533e-01
 };
 
-__device__ long int ceil_device(float num) {
-	if (num<0) {
-		return -floorf(-num);
-	} else {
-		return ceilf(num);
-	}
-}
-
-__device__ long int floor_device(float num) {
-	if (num<0) {
-		return -ceilf(-num);
-	} else {
-		return floorf(num);
-	}
-}
-
 __device__ float exp_semicircle(const float beta, float x){
 	const float xx = x*x;
     
@@ -111,10 +95,10 @@ __global__ void fused_gridding(cufftComplex* r_grid,
     if(idx < num_baselines){
         float pos_r1      = B_in[idx*2+0] * r1r2_scale;
         float pos_r2      = B_in[idx*2+1] * r1r2_scale;
-        long  grid_r1_min = max(ceil_device (pos_r1 - half_support), grid_min_r1r2);
-        long  grid_r1_max = min(floor_device(pos_r1 + half_support), grid_max_r1r2);
-        long  grid_r2_min = max(ceil_device (pos_r2 - half_support), grid_min_r1r2);
-        long  grid_r2_max = min(floor_device(pos_r2 + half_support), grid_max_r1r2);
+        long  grid_r1_min = max((long)ceilf (pos_r1 - half_support), grid_min_r1r2);
+        long  grid_r1_max = min((long)floorf(pos_r1 + half_support), grid_max_r1r2);
+        long  grid_r2_min = max((long)ceilf (pos_r2 - half_support), grid_min_r1r2);
+        long  grid_r2_max = min((long)floorf(pos_r2 + half_support), grid_max_r1r2);
         if (grid_r1_min > grid_r1_max || grid_r2_min > grid_r2_max) {
             return;
         }
@@ -436,7 +420,7 @@ __global__ void tlisi2(float* result,
 
     const size_t i_id      = bid / unit_num;
     const size_t j_id      = bid % unit_num;
-    const size_t factor    = (size_t)ceil_device((float)(unit_size * unit_size)/1024.0f);
+    const size_t factor    = (size_t)ceilf(unit_size*unit_size / 1024.0f);
 
     for(size_t f=0; f<factor; f++){
         if(tid+f*1024 < unit_size*unit_size){
