@@ -58,18 +58,17 @@ __device__ float exp_semicircle(const float beta, const float x){
 }
 
 __global__ void convolveKernel(float *conv_corr_kernel, size_t image_size, size_t grid_size, float conv_corr_norm_factor) {
-	const int support = 8;
-	size_t t1_t2 = blockIdx.x * blockDim.x + threadIdx.x;
-	if (t1_t2 < image_size / 2 + 1) {
-		float t1_t2_norm = static_cast<float>(t1_t2) / grid_size;
-		float correction = 0.0;
-		float angle;
-		for (int i = 0; i < 14; ++i) {
-			angle = M_PI * t1_t2_norm * support * quadrature_nodes[i];
-			correction += quadrature_kernel[i] * quadrature_weights[i] * cosf(angle);
-		}
-		conv_corr_kernel[t1_t2] = correction * support / conv_corr_norm_factor;
-	}
+    const int support = 8;
+    size_t t1_t2 = blockIdx.x*blockDim.x + threadIdx.x;
+    if(t1_t2 < image_size / 2 + 1){
+        float t1_t2_norm = (float)t1_t2 / grid_size;
+        float correction = 0.0;
+        for(int i=0; i < sizeof(quadrature_nodes)/sizeof(*quadrature_nodes); i++){
+            float angle = t1_t2_norm * support * quadrature_nodes[i];
+            correction += quadrature_kernel[i] * quadrature_weights[i] * cospif(angle);
+        }
+        conv_corr_kernel[t1_t2] = correction * support / conv_corr_norm_factor;
+    }
 }
 
 __global__ void fused_gridding(cufftComplex* r_grid,
