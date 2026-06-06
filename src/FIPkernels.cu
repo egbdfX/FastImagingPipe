@@ -248,10 +248,31 @@ __global__ void fused_interpolation(float*       dirty,
             phi = 0.0f;
         }
 
-        if(r2 < 0.5f){
-            theta = __acosd(sqrtf(r2));
-        }else if (r2 <= 1.0f){
-            theta = __asind(sqrtf(1.0f - r2));
+        if(r2 <= 1.0f){
+            if(r2 < 0.5f){
+                theta = __acosd(sqrtf(r2));
+            }else{
+                theta = __asind(sqrtf(1.0f - r2));
+            }
+
+            float z, costhe;
+            sincospif(fmodf(phi,   360.0f) / 180.0f, &x, &y);
+            sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
+            z = 1.0f - z;
+
+            r = r0 * costhe;
+            w = xi*xi + eta*eta;
+
+            if(w == 0.0f){
+                x =  r*x;
+                y = -r*y;
+            }else{
+                x =  r*x + z*r0*xi;
+                y = -r*y + z*r0*eta;
+            }
+
+            oi0 = -x/dc + di2 + 1.0f;
+            oi1 =  y/dc + di2 + 1.0f;
         }else{
             /**
              * Because of the early skip here, we must spill to output_index the values
@@ -267,29 +288,7 @@ __global__ void fused_interpolation(float*       dirty,
 
             oi0 = p1;
             oi1 = p2;
-
-            goto interpolate;
         }
-
-        float z, costhe;
-        sincospif(fmodf(phi,   360.0f) / 180.0f, &x, &y);
-        sincospif(fmodf(theta, 360.0f) / 180.0f, &z, &costhe);
-        z = 1.0f - z;
-
-        r = r0 * costhe;
-        w = xi*xi + eta*eta;
-
-        if(w == 0.0f){
-            x =  r*x;
-            y = -r*y;
-        }else{
-            x =  r*x + z*r0*xi;
-            y = -r*y + z*r0*eta;
-        }
-
-        oi0 = -x/dc + di2 + 1.0f;
-        oi1 =  y/dc + di2 + 1.0f;
-        interpolate:
 
 
         /**
