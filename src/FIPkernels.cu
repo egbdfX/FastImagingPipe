@@ -50,6 +50,23 @@ __constant__ float quadrature_kernel[14] = {
 	8.10934691e-01,9.76937533e-01
 };
 
+
+/**
+ * @brief Ceiling Divide.
+ *
+ * Perform a/b, rounding up.
+ *
+ * @param [in]  a  Dividend.
+ * @param [in]  b  Divisor. Undefined behaviour if 0.
+ * @return Quotient, rounded up to nearest integer.
+ */
+
+__host__ __device__ size_t ceiling_divide(size_t a, size_t b) {
+    size_t q =  a/b;
+    return q + (a > q*b);
+}
+
+
 __device__ float exp_semicircle(const float beta, const float x){
     const float xx = x*x;
     return xx > 1.0f ? 0.0f : expf(beta*(sqrtf(1.0f - xx) - 1.0f));
@@ -465,23 +482,6 @@ __global__ void tlisi2(float* result,
 
 
 /*************************************************************************/
-
-/**
- * @brief Ceiling Divide.
- *
- * Perform a/b, rounding up.
- *
- * @param [in]  a  Dividend.
- * @param [in]  b  Divisor. Undefined behaviour if 0.
- * @return Quotient, rounded up to nearest integer.
- */
-
-size_t ceiling_divide(size_t a, size_t b) {
-    size_t q =  a/b;
-    return q + (a > q*b);
-}
-
-/* New FI pipe. */
 int FIpipe2(float* Visreal,
             float* Visimag,
             float* Bin,
