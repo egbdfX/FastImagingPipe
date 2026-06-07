@@ -507,8 +507,9 @@ int FIpipe2(float* Visreal,
     float* result_data;
 
     size_t i, ind;
-    float  milliseconds=0, milliseconds1=0;
+    float  milliseconds=0;
 
+    char         pci_domain[8] = "";
     const size_t num_events  = num_snapshots>3 ? num_snapshots : 3;
     const size_t unit_num    = image_size/unit_size;
     const size_t grid_size   = ceiling_divide(image_size*3, 2); // * 1.5, rounding up
@@ -524,11 +525,12 @@ int FIpipe2(float* Visreal,
     cufftComplex*  r_grid_stack;
     cudaStream_t   stream1, stream2, stream3;
     cufftHandle    plan;
-    cudaEvent_t    start, stop, *eventstream, *events, *events_kernel;
-    cudaEvent_t    start1, stop1;
+    cudaEvent_t    *eventstream, *events, *events_kernel;
+    cudaEvent_t    evt_pipestart, evt_fftplan, evt_malloc, evt_coeffsready,
+                   evt_loopstart, evt_loopend, evt_pipeend;
 
     NppiSize         nppImageSize = {(int)image_size, (int)image_size};
-    NppStreamContext nppCtx1, nppCtx2, nppCtxt;
+    NppStreamContext nppCtx1;
     size_t           nppWrkspc1Sz;
     Npp8u*           nppWrkspc1;
 
@@ -544,10 +546,13 @@ int FIpipe2(float* Visreal,
                (int)cudaError);
         return -1;
     }else{
+        if(cudaDevProps.pciDomainID != 0)
+            snprintf(pci_domain, sizeof(pci_domain), "%04x:", cudaDevProps.pciDomainID);
+
         printf("Selected GPU %d: %s (UUID: "
                "GPU-%02hhx%02hhx%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-"
                    "%02hhx%02hhx-%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx, "
-               "PCIe [%04x:]%02x:%02x.0)\n",
+               "PCIe %s%02x:%02x.0)\n",
                cudaOrdinal,
                cudaDevProps.name,
                cudaDevProps.uuid.bytes[ 0], cudaDevProps.uuid.bytes[ 1],
@@ -558,7 +563,7 @@ int FIpipe2(float* Visreal,
                cudaDevProps.uuid.bytes[10], cudaDevProps.uuid.bytes[11],
                cudaDevProps.uuid.bytes[12], cudaDevProps.uuid.bytes[13],
                cudaDevProps.uuid.bytes[14], cudaDevProps.uuid.bytes[15],
-               cudaDevProps.pciDomainID,
+               pci_domain,
                cudaDevProps.pciBusID,
                cudaDevProps.pciDeviceID);
     }
@@ -578,6 +583,31 @@ int FIpipe2(float* Visreal,
     }
 
 
+    /**
+     * CUDA Event creation
+     *
+     * Also initiate detailed timing here.
+     */
+
+    cudaEventCreate(&evt_pipestart);
+    cudaEventCreate(&evt_fftplan);
+    cudaEventCreate(&evt_malloc);
+    cudaEventCreate(&evt_coeffsready);
+    cudaEventCreate(&evt_loopstart);
+    cudaEventCreate(&evt_loopend);
+    cudaEventCreate(&evt_pipeend);
+    eventstream   = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    events        = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    events_kernel = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
+    for(i=0; i<num_events; i++){
+        cudaEventCreate(&eventstream[i]);
+        cudaEventCreate(&events[i]);
+        cudaEventCreate(&events_kernel[i]);
+    }
+    cudaEventRecord(evt_pipestart, stream1);
+    cudaEventSynchronize(evt_pipestart);
+
+
     /* cuFFT Plan creation */
     if((cufftError = cufftCreate(&plan))){
         printf("Cannot create cuFFT plan! (%d)\n", (int)cufftError);
@@ -591,27 +621,29 @@ int FIpipe2(float* Visreal,
         printf("Cannot make cuFFT plan for grid of size %zu (%d)\n", grid_size, (int)cufftError);
         return -1;
     }
+    cudaStreamSynchronize(stream1);
+    cudaEventRecord(evt_fftplan, stream1);
+    cudaEventSynchronize(evt_fftplan);
 
 
     /* NPP Context initializations */
-    nppGetStreamContext(&nppCtxt);
-    nppCtx2 = nppCtx1 = nppCtxt;
-    nppCtx1.hStream                            = stream1;
+    nppGetStreamContext(&nppCtx1);
+    nppCtx1.hStream = stream1;
     cudaStreamGetFlags(nppCtx1.hStream, &nppCtx1.nStreamFlags);
-    nppCtx2.hStream                            = stream2;
-    cudaStreamGetFlags(nppCtx2.hStream, &nppCtx2.nStreamFlags);
     nppiMaxGetBufferHostSize_32f_C1R_Ctx(nppImageSize, &nppWrkspc1Sz, nppCtx1);
 
 
     /* Consolidated memory allocations and initializations. */
     cudaMalloc((void**)&nppWrkspc1,          nppWrkspc1Sz);
 
-    cudaMalloc((void**)&image_buffer,        4 * image_size * image_size * sizeof(float));
+    cudaMalloc((void**)&image_buffer,        7 * image_size * image_size * sizeof(float));
     cudaMalloc((void**)&r_grid_stack,            grid_size  * grid_size  * sizeof(cufftComplex));
     cudaMalloc((void**)&Vis_buffer,          8 * num_baselines           * sizeof(float));
 
     cudaMalloc((void**)&conv_corr_kernel,   (image_size/2+1)             * sizeof(float));
     cudaMalloc((void**)&maxall,              3                           * sizeof(float));
+
+    cudaMalloc((void**)&result_data,             unit_num   * unit_num   * sizeof(float));
 
     cudaMallocHost((void**)&pinned_Vis_real, num_baselines *     num_snapshots * sizeof(float));
     cudaMallocHost((void**)&pinned_Vis_imag, num_baselines *     num_snapshots * sizeof(float));
@@ -624,6 +656,9 @@ int FIpipe2(float* Visreal,
     dirty1       = image_buffer + 1*image_size*image_size;
     dirty2       = image_buffer + 2*image_size*image_size;
     dirty3       = image_buffer + 3*image_size*image_size;
+    d_data_1     = image_buffer + 4*image_size*image_size;
+    d_data_2     = image_buffer + 5*image_size*image_size;
+    diff_out     = image_buffer + 6*image_size*image_size;
 
     Vis_realtmp  = Vis_buffer + 0*num_baselines;
     Vis_imagtmp  = Vis_buffer + 1*num_baselines;
@@ -639,6 +674,9 @@ int FIpipe2(float* Visreal,
     }else{
         printf("No CUDA error 1.\n");
     }
+    cudaStreamSynchronize(stream1);
+    cudaEventRecord(evt_malloc, stream1);
+    cudaEventSynchronize(evt_malloc);
 
 
     /**
@@ -668,28 +706,17 @@ int FIpipe2(float* Visreal,
     size_t St = 3 * Tt.x * sizeof(float);
 
 
-    /* CUDA Event creation */
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    eventstream   = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
-    events        = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
-    events_kernel = (cudaEvent_t*)calloc(num_events, sizeof(cudaEvent_t));
-    for(i=0; i<num_events; i++){
-        cudaEventCreate(&eventstream[i]);
-        cudaEventCreate(&events[i]);
-        cudaEventCreate(&events_kernel[i]);
-    }
-
-
     /**
      * Main Loop
      *
      * Begin by calculating the coefficients of a convolution kernel that are static
-     * for the entire duration of the loop. Exclude this from timing.
+     * for the entire duration of the loop.
      */
 
-    convolveKernel <<<Bk, Tk>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
-    cudaEventRecord(start);
+    convolveKernel <<<Bk, Tk,  0,  stream1>>> (conv_corr_kernel, image_size, grid_size, conv_corr_norm_factor);
+    cudaEventRecord(evt_loopstart,   stream3);
+    cudaEventRecord(evt_coeffsready, stream1);
+    cudaStreamSynchronize(stream1);
     /* ****************************************************** */
     for(ind=0, V=((float(*)[3])Vin)-3; ind<num_snapshots; ind++, V+=3){
         cudaMemcpyAsync(Vis_realtmp, pinned_Vis_real + ind*num_baselines,   num_baselines*1*sizeof(float), cudaMemcpyHostToDevice, stream3);
@@ -762,17 +789,72 @@ int FIpipe2(float* Visreal,
                                                    conv_corr_norm_factor,
                                                    1.0f/num_baselines);
     nppiMax_32f_C1R_Ctx(dirty3, image_size*sizeof(float), nppImageSize, nppWrkspc1, maxall+(ind-1), nppCtx1);
+    /* ****************************************************** */
+    cudaEventRecord(evt_loopend, stream1);
+
+
+    // FI Trigger
+    /* ****************************************************** */
+    cudaMemsetAsync(result_data, 0,  unit_num  *unit_num  *sizeof(float), stream1);
+    nppiAbsDiff_32f_C1R_Ctx        (dirty1,   image_size*sizeof(float),
+                                    dirty2,   image_size*sizeof(float),
+                                    d_data_1, image_size*sizeof(float),
+                                    nppImageSize,          nppCtx1);
+    nppiAbsDiff_32f_C1R_Ctx        (dirty2,   image_size*sizeof(float),
+                                    dirty3,   image_size*sizeof(float),
+                                    d_data_2, image_size*sizeof(float),
+                                    nppImageSize,          nppCtx1);
+    nppiThreshold_LTVal_32f_C1R_Ctx(dirty2,   image_size*sizeof(float),
+                                    dirty2,   image_size*sizeof(float), // (In-place)
+                                    nppImageSize,
+                                    nextafterf(0.0f, 1.0f),           // LTVal uses < and we want <=
+                                    C,                     nppCtx1);
+    nppiAbsDiff_32f_C1R_Ctx        (d_data_1, image_size*sizeof(float),
+                                    d_data_2, image_size*sizeof(float),
+                                    diff_out, image_size*sizeof(float),
+                                    nppImageSize,          nppCtx1);
+    tlisi2 <<<Bt, Tt, St, stream1>>> (result_data, diff_out, dirty2, unit_size, image_size, unit_num, maxall);
+    cudaMemcpyAsync(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost, stream1);
+    /* ****************************************************** */
+    cudaEventRecord(evt_pipeend, stream1);
+    cudaEventSynchronize(evt_pipeend);
+
+
+    cudaEventElapsedTime(&milliseconds, evt_pipestart, evt_coeffsready);
+    printf("Time elapsed (Setup):                        %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_pipestart, evt_fftplan);
+    printf("                 (FFT planning):                 %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_fftplan,   evt_malloc);
+    printf("                 (CUDA memory allocation):       %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_malloc,    evt_coeffsready);
+    printf("                 (Coefficients calculation):     %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_loopstart, evt_coeffsready);
+    printf("                     (Overlap with loop start):  %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_loopstart, evt_loopend);
+    printf("Time elapsed (loop start to loop end):       %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_loopend,   evt_pipeend);
+    printf("Time elapsed (FItrigger):                    %9.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_pipestart, evt_pipeend);
+    printf("Time elapsed (Full pipe, %5zu snapshots):   %9.6f ms\n", num_snapshots, (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, evt_loopstart, evt_pipeend);
+    printf("                 (Loop start to pipe end):       %9.6f ms\n", (double)milliseconds);
+
 
     cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream2);
+    cudaStreamSynchronize(stream3);
 
-    /* ****************************************************** */
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Time elapsed: %9.6f ms\n", (double)milliseconds);
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    cudaEventDestroy(evt_pipestart);
+    cudaEventDestroy(evt_fftplan);
+    cudaEventDestroy(evt_malloc);
+    cudaEventDestroy(evt_coeffsready);
+    cudaEventDestroy(evt_loopstart);
+    cudaEventDestroy(evt_loopend);
+    cudaEventDestroy(evt_pipeend);
     for(i=0; i<num_events; i++){
         cudaEventDestroy(eventstream[i]);
         cudaEventDestroy(events[i]);
@@ -785,10 +867,6 @@ int FIpipe2(float* Visreal,
     events        = NULL;
     events_kernel = NULL;
 
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
-    cudaStreamDestroy(stream3);
-
     cudaFree(r_grid_stack);
     cudaFree(Vis_buffer);
     cudaFree(conv_corr_kernel);
@@ -797,59 +875,8 @@ int FIpipe2(float* Visreal,
     cudaFreeHost(pinned_Vis_imag);
     cudaFreeHost(pinned_B_in);
 
-
-    // FI Trigger
-    cudaMalloc((void**)&d_data_1,    image_size*image_size*sizeof(float));
-    cudaMalloc((void**)&d_data_2,    image_size*image_size*sizeof(float));
-    cudaMalloc((void**)&diff_out,    image_size*image_size*sizeof(float));
-    cudaMalloc((void**)&result_data, unit_num  *unit_num  *sizeof(float));
-
-    cudaMemset(d_data_1,    0,       image_size*image_size*sizeof(float));
-    cudaMemset(d_data_2,    0,       image_size*image_size*sizeof(float));
-    cudaMemset(diff_out,    0,       image_size*image_size*sizeof(float));
-    cudaMemset(result_data, 0,       unit_num  *unit_num  *sizeof(float));
-
-    cudaEventCreate(&start1);
-    cudaEventCreate(&stop1);
-
-    cudaEventRecord(start1);
-    /* ****************************************************** */
-    nppiAbsDiff_32f_C1R_Ctx        (dirty1,   image_size*sizeof(float),
-                                    dirty2,   image_size*sizeof(float),
-                                    d_data_1, image_size*sizeof(float),
-                                    nppImageSize,          nppCtxt);
-    nppiAbsDiff_32f_C1R_Ctx        (dirty2,   image_size*sizeof(float),
-                                    dirty3,   image_size*sizeof(float),
-                                    d_data_2, image_size*sizeof(float),
-                                    nppImageSize,          nppCtxt);
-    nppiThreshold_LTVal_32f_C1R_Ctx(dirty2,   image_size*sizeof(float),
-                                    dirty2,   image_size*sizeof(float), // (In-place)
-                                    nppImageSize,
-                                    nextafterf(0.0f, 1.0f),           // LTVal uses < and we want <=
-                                    C,
-                                    nppCtxt);
-    nppiAbsDiff_32f_C1R_Ctx        (d_data_1, image_size*sizeof(float),
-                                    d_data_2, image_size*sizeof(float),
-                                    diff_out, image_size*sizeof(float),
-                                    nppImageSize,          nppCtxt);
-    tlisi2 <<<Bt, Tt, St>>> (result_data, diff_out, dirty2, unit_size, image_size, unit_num, maxall);
-
-    /* ****************************************************** */
-    cudaEventRecord(stop1);
-    cudaEventSynchronize(stop1);
-    cudaEventElapsedTime(&milliseconds1, start1, stop1);
-    printf("Time elapsed: %9.6f ms\n", (double)milliseconds1);
-    cudaEventDestroy(start1);
-    cudaEventDestroy(stop1);
-
-    cudaMemcpy(result_array, result_data, unit_num * unit_num * sizeof(float), cudaMemcpyDeviceToHost);
-
     cudaFree(image_buffer);
     cudaFree(maxall);
-
-    cudaFree(d_data_1);
-    cudaFree(d_data_2);
-    cudaFree(diff_out);
     cudaFree(result_data);
 
     cudaFree(nppWrkspc1);
