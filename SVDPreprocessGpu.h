@@ -39,6 +39,10 @@ struct HostPreprocessOutputs {
 };
 
 HostMeasurementSetData read_measurement_set(const std::string& ms_path);
+HostMeasurementSetData read_measurement_set_rows(
+    const std::string& ms_path,
+    const std::vector<std::size_t>& selected_rows
+);
 void preprocess_measurement_set_gpu(
     const HostMeasurementSetData& host_data,
     DevicePreprocessBuffers& device_buffers

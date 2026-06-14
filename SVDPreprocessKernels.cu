@@ -237,14 +237,15 @@ __global__ void collapse_visibility_kernel(
 }
 
 template <typename T>
-T* cuda_alloc_and_copy(const std::vector<T>& host_values) {
+T* cuda_alloc_and_copy(const std::vector<T>& host_values, cudaStream_t stream) {
     T* device_ptr = nullptr;
     CHECK_CUDA(cudaMalloc(&device_ptr, host_values.size() * sizeof(T)));
-    CHECK_CUDA(cudaMemcpy(
+    CHECK_CUDA(cudaMemcpyAsync(
         device_ptr,
         host_values.data(),
         host_values.size() * sizeof(T),
-        cudaMemcpyHostToDevice
+        cudaMemcpyHostToDevice,
+        stream
     ));
     return device_ptr;
 }
@@ -261,6 +262,7 @@ void preprocess_measurement_set_gpu(
 
     cublasHandle_t cublas_handle = nullptr;
     cusolverDnHandle_t cusolver_handle = nullptr;
+    cudaStream_t stream = nullptr;
 
     float* d_uvw = nullptr;
     float* d_freq = nullptr;
@@ -282,19 +284,22 @@ void preprocess_measurement_set_gpu(
     float* d_workspace = nullptr;
 
     try {
+        CHECK_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         CHECK_CUBLAS(cublasCreate(&cublas_handle));
         CHECK_CUSOLVER(cusolverDnCreate(&cusolver_handle));
+        CHECK_CUBLAS(cublasSetStream(cublas_handle, stream));
+        CHECK_CUSOLVER(cusolverDnSetStream(cusolver_handle, stream));
 
-        d_uvw = cuda_alloc_and_copy(host_data.uvw);
-        d_freq = cuda_alloc_and_copy(host_data.frequencies_hz);
-        d_vis0_real = cuda_alloc_and_copy(host_data.vis0_real);
-        d_vis0_imag = cuda_alloc_and_copy(host_data.vis0_imag);
-        d_vis3_real = cuda_alloc_and_copy(host_data.vis3_real);
-        d_vis3_imag = cuda_alloc_and_copy(host_data.vis3_imag);
-        d_flag0 = cuda_alloc_and_copy(host_data.flag0);
-        d_flag3 = cuda_alloc_and_copy(host_data.flag3);
-        d_weight0 = cuda_alloc_and_copy(host_data.weight0);
-        d_weight3 = cuda_alloc_and_copy(host_data.weight3);
+        d_uvw = cuda_alloc_and_copy(host_data.uvw, stream);
+        d_freq = cuda_alloc_and_copy(host_data.frequencies_hz, stream);
+        d_vis0_real = cuda_alloc_and_copy(host_data.vis0_real, stream);
+        d_vis0_imag = cuda_alloc_and_copy(host_data.vis0_imag, stream);
+        d_vis3_real = cuda_alloc_and_copy(host_data.vis3_real, stream);
+        d_vis3_imag = cuda_alloc_and_copy(host_data.vis3_imag, stream);
+        d_flag0 = cuda_alloc_and_copy(host_data.flag0, stream);
+        d_flag3 = cuda_alloc_and_copy(host_data.flag3, stream);
+        d_weight0 = cuda_alloc_and_copy(host_data.weight0, stream);
+        d_weight3 = cuda_alloc_and_copy(host_data.weight3, stream);
 
         const std::size_t num_samples = host_data.num_samples;
         const int threads = 256;
@@ -312,7 +317,7 @@ void preprocess_measurement_set_gpu(
         CHECK_CUDA(cudaMalloc(&device_buffers.d_vis_imag, num_samples * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&d_info, sizeof(int)));
 
-        expand_baselines_kernel<<<blocks, threads>>>(
+        expand_baselines_kernel<<<blocks, threads, 0, stream>>>(
             d_uvw,
             d_freq,
             d_baselines,
@@ -321,18 +326,31 @@ void preprocess_measurement_set_gpu(
         );
         CHECK_CUDA(cudaGetLastError());
 
-        CHECK_CUDA(cudaMemset(d_sums, 0, 3 * sizeof(float)));
-        accumulate_sums_kernel<<<blocks, threads>>>(d_baselines, d_sums, num_samples);
+        CHECK_CUDA(cudaMemsetAsync(d_sums, 0, 3 * sizeof(float), stream));
+        accumulate_sums_kernel<<<blocks, threads, 0, stream>>>(d_baselines, d_sums, num_samples);
         CHECK_CUDA(cudaGetLastError());
 
         std::vector<float> sums(3);
-        CHECK_CUDA(cudaMemcpy(sums.data(), d_sums, 3 * sizeof(float), cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpyAsync(
+            sums.data(),
+            d_sums,
+            3 * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            stream
+        ));
+        CHECK_CUDA(cudaStreamSynchronize(stream));
         for (float& value : sums) {
             value /= static_cast<float>(num_samples);
         }
-        CHECK_CUDA(cudaMemcpy(d_sums, sums.data(), 3 * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpyAsync(
+            d_sums,
+            sums.data(),
+            3 * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream
+        ));
 
-        center_baselines_kernel<<<blocks, threads>>>(d_baselines, d_sums, d_centered, num_samples);
+        center_baselines_kernel<<<blocks, threads, 0, stream>>>(d_baselines, d_sums, d_centered, num_samples);
         CHECK_CUDA(cudaGetLastError());
 
         const float alpha = 1.0f;
@@ -381,15 +399,16 @@ void preprocess_measurement_set_gpu(
         ));
 
         int info = 0;
-        CHECK_CUDA(cudaMemcpy(&info, d_info, sizeof(int), cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpyAsync(&info, d_info, sizeof(int), cudaMemcpyDeviceToHost, stream));
+        CHECK_CUDA(cudaStreamSynchronize(stream));
         if (info != 0) {
             throw std::runtime_error("cuSOLVER eigen decomposition failed");
         }
 
-        build_basis_kernel<<<1, 1>>>(d_covariance, d_basis, device_buffers.d_vin);
+        build_basis_kernel<<<1, 1, 0, stream>>>(d_covariance, d_basis, device_buffers.d_vin);
         CHECK_CUDA(cudaGetLastError());
 
-        project_bin_kernel<<<blocks, threads>>>(
+        project_bin_kernel<<<blocks, threads, 0, stream>>>(
             d_baselines,
             d_basis,
             device_buffers.d_bin,
@@ -397,7 +416,7 @@ void preprocess_measurement_set_gpu(
         );
         CHECK_CUDA(cudaGetLastError());
 
-        align_pca_signs_kernel<<<1, 1>>>(
+        align_pca_signs_kernel<<<1, 1, 0, stream>>>(
             d_basis,
             device_buffers.d_vin,
             device_buffers.d_bin,
@@ -405,7 +424,7 @@ void preprocess_measurement_set_gpu(
         );
         CHECK_CUDA(cudaGetLastError());
 
-        collapse_visibility_kernel<<<blocks, threads>>>(
+        collapse_visibility_kernel<<<blocks, threads, 0, stream>>>(
             d_vis0_real,
             d_vis0_imag,
             d_vis3_real,
@@ -419,10 +438,13 @@ void preprocess_measurement_set_gpu(
             num_samples
         );
         CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaStreamSynchronize(stream));
 
         device_buffers.num_samples = num_samples;
     } catch (...) {
+        if (stream != nullptr) {
+            cudaStreamSynchronize(stream);
+        }
         free_device_preprocess_buffers(device_buffers);
         cudaFree(d_uvw);
         cudaFree(d_freq);
@@ -448,6 +470,9 @@ void preprocess_measurement_set_gpu(
         if (cusolver_handle != nullptr) {
             cusolverDnDestroy(cusolver_handle);
         }
+        if (stream != nullptr) {
+            cudaStreamDestroy(stream);
+        }
         throw;
     }
 
@@ -471,6 +496,7 @@ void preprocess_measurement_set_gpu(
     cudaFree(d_workspace);
     CHECK_CUBLAS(cublasDestroy(cublas_handle));
     CHECK_CUSOLVER(cusolverDnDestroy(cusolver_handle));
+    CHECK_CUDA(cudaStreamDestroy(stream));
 }
 
 void download_preprocess_outputs(

@@ -1,4 +1,5 @@
 CUDA_HOME ?= /usr/local/cuda
+CUDA_ARCH ?= 80
 
 CFITSIO_HOME := $(HOME)/Libraries/cfitsio
 CASACORE_HOME ?= /usr
@@ -10,9 +11,11 @@ PREPROCESS_LIB := $(LIB) -lcublas -lcusolver -L$(CASACORE_HOME)/lib/x86_64-linux
 
 GCC := g++
 NVCC := $(CUDA_HOME)/bin/nvcc
+THREAD_FLAGS := -pthread
+NVCC_THREAD_FLAGS := -Xcompiler -pthread
 
-GCC_OPTS :=-O3 -fPIC -Wall -Wextra $(INC) -std=c++11
-NVCCFLAGS :=-O3 -gencode arch=compute_90,code=sm_90 --ptxas-options=-v -Xcompiler -fPIC -Xcompiler -Wextra -lineinfo $(INC) --use_fast_math
+GCC_OPTS :=-O3 -fPIC -Wall -Wextra $(INC) -std=c++11 $(THREAD_FLAGS)
+NVCCFLAGS :=-O3 -gencode arch=compute_$(CUDA_ARCH),code=sm_$(CUDA_ARCH) --ptxas-options=-v -Xcompiler -fPIC -Xcompiler -Wextra -lineinfo $(INC) --use_fast_math
 
 all: clean sharedlibrary_gpu
 
@@ -20,7 +23,7 @@ sharedlibrary_gpu: pipe_interface.o FIPkernels.o
 	$(NVCC) -o sharedlibrary_gpu $(NVCCFLAGS) pipe_interface.o FIPkernels.o $(LIB)
 
 svd_preprocess_gpu: SVDPreprocessMain.o SVDPreprocessKernels.o
-	$(NVCC) -o svd_preprocess_gpu $(NVCCFLAGS) SVDPreprocessMain.o SVDPreprocessKernels.o $(PREPROCESS_LIB)
+	$(NVCC) -o svd_preprocess_gpu $(NVCCFLAGS) $(NVCC_THREAD_FLAGS) SVDPreprocessMain.o SVDPreprocessKernels.o $(PREPROCESS_LIB)
 
 pipe_interface.o: pipe_interface.cpp
 	$(GCC) -c pipe_interface.cpp $(GCC_OPTS) -o pipe_interface.o
