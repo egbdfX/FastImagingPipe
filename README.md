@@ -14,7 +14,7 @@ python SVD_MFS.py
 GPU version: 
 ```
 make -f Makefile.gpu svd_preprocess_gpu
-./svd_preprocess_gpu PSR0.ms PSR1.ms PSR2.ms
+./svd_preprocess_gpu --group-by-time --snapshot-workers 16 --combined-output name_input.fits /path/to/ms
 ```
 
 **Step 1:**
