@@ -1,5 +1,5 @@
 CUDA_HOME ?= /usr/local/cuda
-CUDA_ARCH ?= 80
+CUDA_ARCH ?= 90
 
 CFITSIO_HOME := $(HOME)/Libraries/cfitsio
 CASACORE_HOME ?= /usr
