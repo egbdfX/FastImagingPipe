@@ -9,6 +9,7 @@
 #include <npp.h>
 
 #include "utils.h"
+#include "fip-pipeline-cuda-state.h"
 
 
 /**
@@ -881,5 +882,28 @@ int FIpipe2(float* Visreal,
 
     cudaFree(nppWrkspc1);
 
+    return 0;
+}
+
+int fip_pipe_cuda(fip_pipeline_cuda_state* pipe,
+                  fitsfile* const          input,
+                  fitsfile* const          output,
+                  const size_t             snap_start,
+                  const size_t             snap_count,
+                  const size_t             num_baselines,
+                  const size_t             image_size,
+                  const float              cell_size,
+                  const size_t             unit_size,
+                  const size_t             unit_num){
+    (void)pipe;
+    (void)input;
+    (void)output;
+    (void)snap_start;
+    (void)snap_count;
+    (void)num_baselines;
+    (void)image_size;
+    (void)cell_size;
+    (void)unit_size;
+    (void)unit_num;
     return 0;
 }
