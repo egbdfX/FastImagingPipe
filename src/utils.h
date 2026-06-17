@@ -6,6 +6,7 @@
 
 /* Includes */
 #include <stdlib.h>
+#include <fitsio.h>
 
 
 
@@ -40,6 +41,28 @@ int FIpipe2            (float* Visreal,
 float* read_fits_image (const char* filename, long*  naxes);
 int    write_fits_image(const char* filename, float* image_data, long* naxes);
 
+int    fip_input_open_diskfile   (fitsfile**  fptr,
+                                  const char* filename,
+                                  int         iomode,
+                                  int*        status);
+
+int    fip_input_get_stats       (fitsfile*   fptr,
+                                  long long*  num_snapshots,
+                                  long long*  num_baselines,
+                                  int*        status);
+
+int    fip_output_open_diskfile  (fitsfile**  fptr,
+                                  const char* filename,
+                                  int         iomode,
+                                  long long   snap_count,
+                                  long long   unit_num,
+                                  int*        status);
+
+int    fip_output_create_diskfile(fitsfile**  fptr,
+                                  const char* filename,
+                                  long long   snap_count,
+                                  long long   unit_num,
+                                  int*        status);
 
 
 /* End Extern "C" and Include Guard */
