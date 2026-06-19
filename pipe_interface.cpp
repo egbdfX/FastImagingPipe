@@ -180,7 +180,7 @@ int main(int argc, char* argv[]) {
 	
     FIpipe(Visreal, Visimag, Bin, Vin, result_array, num_baselines, image_size, num_snapshots, cell_size, unit_size);
 	
-    long naxes[2] = {long(unit_size), long(unit_size)};
+    long naxes[2] = {long(unit_num), long(unit_num)};
     int status = write_fits_image(output_name, result_array, naxes);
     if (status) {
         fprintf(stderr, "Error writing FITS image\n");
