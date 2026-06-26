@@ -26,6 +26,20 @@ typedef struct fip_pipeline_cuda_state fip_pipeline_cuda_state;
 /* Structure Definitions */
 struct fip_pipeline_cuda_state{
     /**
+     * Basic Parameters
+     */
+
+    struct{
+        size_t num_baselines;
+        size_t image_size;
+        float  cell_size;
+        size_t grid_size;
+        size_t unit_size;
+        size_t unit_num;
+    } param;
+
+
+    /**
      * CUDA Device Management
      */
 
@@ -37,7 +51,7 @@ struct fip_pipeline_cuda_state{
                          // "GPU-<8 hex>-<4 hex>-<4 hex>-<4 hex>-<12 hex>"
         char  pci [16];  // Device PCI address. Format: "DDDD:BB:DD.F", with
                          // domain not rendered if zero.
-    } dev;
+    } device;
 
 
     /**
@@ -74,7 +88,7 @@ struct fip_pipeline_cuda_state{
     /**
      * CUDA Kernel Launch Configurations
      *
-     * There are at least six typical launch configurations:
+     * There are at least four typical launch configurations:
      *
      *   NAME            #THRD  #BLOCK                             SHMEM
      *   "s" (Square):   32x32, ~image_size/32 x ~image_size/32
@@ -96,29 +110,50 @@ struct fip_pipeline_cuda_state{
      * Ring Buffer Management
      *
      *   # vis_bin_pinned
-     *       - Shape (depth=2, 2+2, num_baselines)
-     *       - Depth: Double-buffered.
+     *       - Shape:    (depth=2, 2+2, num_baselines)
+     *       - Depth:    Double-buffered.
+     *       - Stride:   num_baselines*2*sizeof(float)
      *       - Location: CPU host memory. Pinned.
      *       - Content:
-     *         - num_baselines complex single-precision values followed by
+     *         - num_baselines complex single-precision values, followed by
      *         - num_baselines*2 corresponding single-precision coordinates.
      *         - Total: 4*num_baselines single-precision floats.
-     *       - Designed for single cudaMemcpyAsync(H->D) to copy all data to GPU.
+     *       - Designed for single cudaMemcpy2DAsync(H->D) to copy all data to GPU.
      *
      *   # vis_bin_gpu
-     *       - Shape (depth=2, 2+2, num_baselines)
-     *       - Depth: Double-buffered.
+     *       - Shape:    (depth=2, 2+2, num_baselines)
+     *       - Depth:    Double-buffered.
+     *       - Stride:   >= num_baselines*2*sizeof(float)
      *       - Location: GPU memory.
-     *       - Identical to "vis_bin_pinned".
-     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu} and grid_gpu.
+     *       - Content:  Identical to "vis_bin_pinned".
+     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu}, transform_{pinned,gpu}, and grid_gpu.
+     *
+     *   # transform_pinned
+     *       - Shape:    (depth=2, 3, 3)
+     *       - Depth:    Double-buffered.
+     *       - Stride:   3*3*sizeof(float)
+     *       - Location: CPU host memory. Pinned.
+     *       - Content:
+     *         - 3x3 transform matrix.
+     *         - Total: 9 single-precision floats.
+     *       - Designed for single cudaMemcpyAsync(H->D) to copy all data to GPU.
+     *
+     *   # transform_gpu
+     *       - Shape:    (depth=2, 3, 3)
+     *       - Depth:    Double-buffered.
+     *       - Stride:   >= 3*3*sizeof(float), likely 64 or 128 bytes precisely.
+     *       - Location: GPU memory.
+     *       - Content:  Identical to "transform_pinned".
+     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu}, transform_{pinned,gpu}, and grid_gpu.
      *
      *   # grid_gpu
-     *       - Shape (depth=2, grid_size, grid_size)
-     *       - Depth: Double-buffered (2) or Triple-buffered (3).
+     *       - Shape:    (depth=2, grid_size, grid_size)
+     *       - Depth:    Double-buffered (2) or Triple-buffered (3).
      *         - Triple-buffered requires more memory but can overlap computation
      *           with both gridding and interpolation if necessary.
-     *         - Double-buffered is simpler but requires deciding if cuFFT should be
-     *           done on the gridding or interpolation streams.
+     *         - [FUTURE]: Double-buffered is lighter but requires deciding if cuFFT
+     *                     should be done on the gridding or interpolation streams.
+     *       - Stride:   >= grid_size*2*sizeof(float)
      *       - Location: GPU memory.
      *       - Content:
      *         - grid_size x grid_size complex single-precision floats.
@@ -159,35 +194,56 @@ struct fip_pipeline_cuda_state{
 
     struct{
         struct{
-            size_t  vis_bin; // % 2
-            size_t  grid;    // % 2 or 3
-            size_t  image;   // % >= 4
-            size_t  result;  // % 2
+            size_t  vis_bin;   // % 2
+            size_t  transform; // % 2
+            size_t  grid;      // % 2 or 3
+            size_t  image;     // % >= 4
+            size_t  result;    // % 2
         } depth, stride;
 
-        float*      vis_bin_pinned;
-        float*      vis_bin_gpu;
-        float*      grid_gpu;
-        float*      image_gpu;
-        float*      max_gpu;
-        float*      result_gpu;
-        float*      result_pinned;
+        void*       vis_bin_pinned;
+        void*       vis_bin_gpu;
+        void*       transform_pinned;
+        void*       transform_gpu;
+        void*       grid_gpu;
+        void*       image_gpu;
+        void*       max_gpu;
+        void*       result_gpu;
+        void*       result_pinned;
     } ring;
+
+    struct{
+        struct{
+            void*   ptr;
+            size_t  sz;
+        } cufft, npp;
+
+        float*      conv_corr_kernel;
+    } wrkspc;
 };
 
 
 
 /* Function Prototypes */
-int fip_pipe_cuda(fip_pipeline_cuda_state* pipe,
-                  fitsfile* const          input,
-                  fitsfile* const          output,
-                  const size_t             snap_start,
-                  const size_t             snap_count,
-                  const size_t             num_baselines,
-                  const size_t             image_size,
-                  const float              cell_size,
-                  const size_t             unit_size,
-                  const size_t             unit_num);
+inline void fip_pipe_cuda_init(fip_pipeline_cuda_state* pipe,
+                               const size_t             num_baselines,
+                               const size_t             image_size,
+                               const float              cell_size,
+                               const size_t             unit_size,
+                               const size_t             unit_num){
+    memset(pipe, 0, sizeof(*pipe));
+    pipe->param.num_baselines = num_baselines;
+    pipe->param.grid_size     = (image_size*3+1)/2; // * 1.5, rounding up;
+    pipe->param.image_size    = image_size;
+    pipe->param.unit_size     = unit_size;
+    pipe->param.unit_num      = unit_num;
+}
+
+int  fip_pipe_cuda     (fip_pipeline_cuda_state* pipe,
+                        fitsfile* const          input,
+                        fitsfile* const          output,
+                        const size_t             snap_start,
+                        const size_t             snap_end);
 
 
 

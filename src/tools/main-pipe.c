@@ -459,15 +459,8 @@ int main_pipe(int argc, char* argv[]){
 
     /* Execute Pipeline */
     fip_pipeline_cuda_state pipe;
-    rc = fip_pipe_cuda(&pipe,
-                       input, output,
-                       snap_start_final,
-                       snap_count_final,
-                       num_baselines,
-                       image_size,
-                       cell_size,
-                       unit_size,
-                       unit_num);
+    fip_pipe_cuda_init(&pipe, num_baselines, image_size, cell_size, unit_size, unit_num);
+    rc = fip_pipe_cuda(&pipe, input, output, snap_start_final, snap_end_final);
     fits_flush_file(output, &fits_status);
 
 

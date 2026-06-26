@@ -480,6 +480,82 @@ __global__ void tlisi2(float* result,
     }
 }
 
+__global__ void fip_pipe_cuda_tlisi(float*       result,
+                                    const size_t result_stride,
+                                    const float* image0,
+                                    const float* max0,
+                                    const float* image1,
+                                    const float* max1,
+                                    const float* image2,
+                                    const float* max2,
+                                    const size_t image_stride,
+                                    const size_t image_size,
+                                    const size_t unit_size,
+                                    const size_t unit_num,
+                                    const float  C){
+    extern  __shared__  float sharedNumDen[];
+
+    const float  maxallval = fmaxf(*max0, fmaxf(*max1, *max2));
+    const size_t bid       = blockIdx.x; // tile index
+    const size_t tid       = threadIdx.x;
+
+    const size_t i_id      = bid / unit_num;
+    const size_t j_id      = bid % unit_num;
+    const size_t factor    = ceiling_divide(unit_size*unit_size, 1024);
+
+    for(size_t f=0; f<factor; f++){
+        if(tid+f*1024 < unit_size*unit_size){
+            if(f == 0){
+                sharedNumDen[tid+   0] = 0; /* Sum of diff_out */
+                sharedNumDen[tid+1024] = 0; /* Max of diff_out */
+                sharedNumDen[tid+2048] = 0; /* Sum of r        */
+            }
+            const size_t rows = (tid + f*1024) / unit_size;
+            const size_t cols = (tid + f*1024) % unit_size;
+
+            const size_t I_id = i_id * unit_size + rows;
+            const size_t J_id = j_id * unit_size + cols;
+            const size_t off  = I_id * image_stride/sizeof(float) + J_id;
+
+            const float  img_val0 = image0[off],
+                         img_val1 = image1[off],
+                         img_val2 = image2[off],
+                         abs_df01 = fabsf(img_val0-img_val1),
+                         abs_df12 = fabsf(img_val1-img_val2),
+                         diff_out = fabsf(abs_df01-abs_df12),
+                         snap_val = img_val1<=0 ? C : img_val1;
+
+            sharedNumDen[tid+   0] =                             sharedNumDen[tid+   0] + diff_out;
+            sharedNumDen[tid+1024] =                         max(sharedNumDen[tid+1024],  diff_out);
+            sharedNumDen[tid+2048] = (diff_out / snap_val < 1) ? sharedNumDen[tid+2048] + diff_out / snap_val :
+                                                                 sharedNumDen[tid+2048] + 1;
+        }else{
+            if(f == 0){
+                sharedNumDen[tid+   0] = 0; /* Sum of diff_out */
+                sharedNumDen[tid+1024] = 0; /* Max of diff_out */
+                sharedNumDen[tid+2048] = 0; /* Sum of r        */
+            }
+        }
+    }
+
+    for(size_t d = blockDim.x/2; d>0; d/=2){
+        __syncthreads();
+        if(tid<d){
+            sharedNumDen[tid+   0] +=     sharedNumDen[tid+d];
+            sharedNumDen[tid+1024]  = max(sharedNumDen[tid+1024],
+                                          sharedNumDen[tid+1024+d]);
+            sharedNumDen[tid+2048] +=     sharedNumDen[tid+2048+d];
+        }
+    }
+
+    if(tid==0){
+        result[i_id*result_stride + j_id] =
+            1 - (sharedNumDen[0   ]/unit_size/unit_size) *
+                 sharedNumDen[1024]                      *
+                (sharedNumDen[2048]/unit_size/unit_size) / maxallval / maxallval;
+    }
+}
+
 
 
 /*************************************************************************/
@@ -885,25 +961,577 @@ int FIpipe2(float* Visreal,
     return 0;
 }
 
-int fip_pipe_cuda(fip_pipeline_cuda_state* pipe,
-                  fitsfile* const          input,
-                  fitsfile* const          output,
-                  const size_t             snap_start,
-                  const size_t             snap_count,
-                  const size_t             num_baselines,
-                  const size_t             image_size,
-                  const float              cell_size,
-                  const size_t             unit_size,
-                  const size_t             unit_num){
+static cudaError     fip_pipe_cuda_select_device             (fip_pipeline_cuda_state* pipe){
+    cudaError_t cudaError;
+
+    if((cudaError = cudaGetDevice(&pipe->device.ordinal))){
+        fprintf(stderr, "Cannot find CUDA device: %s (%d)\n",
+                cudaGetErrorString(cudaError),
+                (int)cudaError);
+        return cudaError;
+    }
+
+    if((cudaError = cudaGetDeviceProperties(&pipe->device.props,
+                                             pipe->device.ordinal))){
+        fprintf(stderr, "Cannot get the properties of CUDA device with ordinal %d: %s (%d)\n",
+                        (int)pipe->device.ordinal,
+                        cudaGetErrorString(cudaError),
+                        (int)cudaError);
+        return cudaError;
+    }else{
+        if(pipe->device.props.pciDomainID != 0){
+            snprintf(pipe->device.pci, sizeof(pipe->device.pci),
+                     "%04x:%02x:%02x.0",
+                     pipe->device.props.pciDomainID,
+                     pipe->device.props.pciBusID,
+                     pipe->device.props.pciDeviceID);
+        }else{
+            snprintf(pipe->device.pci, sizeof(pipe->device.pci),
+                     "%02x:%02x.0",
+                     pipe->device.props.pciBusID,
+                     pipe->device.props.pciDeviceID);
+        }
+        snprintf(pipe->device.name, sizeof(pipe->device.name),
+                 "%s",
+                 pipe->device.props.name);
+        snprintf(pipe->device.uuid, sizeof(pipe->device.uuid),
+                 "GPU-%02hhx%02hhx%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-"
+                     "%02hhx%02hhx-%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx",
+                 pipe->device.props.uuid.bytes[ 0], pipe->device.props.uuid.bytes[ 1],
+                 pipe->device.props.uuid.bytes[ 2], pipe->device.props.uuid.bytes[ 3],
+                 pipe->device.props.uuid.bytes[ 4], pipe->device.props.uuid.bytes[ 5],
+                 pipe->device.props.uuid.bytes[ 6], pipe->device.props.uuid.bytes[ 7],
+                 pipe->device.props.uuid.bytes[ 8], pipe->device.props.uuid.bytes[ 9],
+                 pipe->device.props.uuid.bytes[10], pipe->device.props.uuid.bytes[11],
+                 pipe->device.props.uuid.bytes[12], pipe->device.props.uuid.bytes[13],
+                 pipe->device.props.uuid.bytes[14], pipe->device.props.uuid.bytes[15]);
+    }
+
+    if(pipe->device.props.maxThreadsPerBlock < 1024){
+        fprintf(stderr, "Selected CUDA device supports fewer than 1024 threads/block! (%d)\n",
+                        pipe->device.props.maxThreadsPerBlock);
+        return cudaErrorInvalidValue;
+    }
+    return cudaSuccess;
+}
+
+static cudaError     fip_pipe_cuda_plan_launch               (fip_pipeline_cuda_state* pipe){
+    /**
+     * There are at least four typical CUDA kernel launch configurations:
+     *
+     *   NAME            #THRD  #BLOCK                             SHMEM
+     *   "s" (Square):   32x32, ~image_size/32 x ~image_size/32
+     *   "k" (Convolve): 1024,  ~(image_size/2+1)/1024
+     *   "g" (Gridding): 1024,  ~num_baselines/1024
+     *   "t" (TLISI):    1024,   unit_num*unit_num                 3*1024 floats
+     *
+     * Abbreviate them and centralize their calculations here.
+     */
+
+    pipe->launch.Ts.x = 32;
+    pipe->launch.Ts.y = 32;
+    pipe->launch.Ts.z = 1;
+    pipe->launch.Bs.x = (unsigned)ceiling_divide(pipe->param.image_size,     pipe->launch.Ts.x);
+    pipe->launch.Bs.y = (unsigned)ceiling_divide(pipe->param.image_size,     pipe->launch.Ts.y);
+    pipe->launch.Bs.z = 1;
+
+    pipe->launch.Tk.x = 1024;
+    pipe->launch.Tk.y = 1;
+    pipe->launch.Tk.z = 1;
+    pipe->launch.Bk.x = (unsigned)ceiling_divide(pipe->param.image_size/2+1, pipe->launch.Tk.x);
+    pipe->launch.Bk.y = 1;
+    pipe->launch.Bk.z = 1;
+
+    pipe->launch.Tg.x = 1024;
+    pipe->launch.Tg.y = 1;
+    pipe->launch.Tg.z = 1;
+    pipe->launch.Bg.x = (unsigned)ceiling_divide(pipe->param.num_baselines,  pipe->launch.Tg.x);
+    pipe->launch.Bg.y = 1;
+    pipe->launch.Bg.z = 1;
+
+    pipe->launch.Tt.x = 1024;
+    pipe->launch.Tt.y = 1;
+    pipe->launch.Tt.z = 1;
+    pipe->launch.Bt.x = (unsigned)(pipe->param.unit_num * pipe->param.unit_num);
+    pipe->launch.Bt.y = 1;
+    pipe->launch.Bt.z = 1;
+    pipe->launch.St   = 3 * pipe->launch.Tt.x * sizeof(float);
+
+    return cudaSuccess;
+}
+
+static cudaError     fip_pipe_cuda_plan_npp                  (fip_pipeline_cuda_state* pipe,
+                                                              NppiSize*                npp_image_size,
+                                                              NppStreamContext*        npp_ctx){
+    npp_image_size->height = (int)pipe->param.image_size;
+    npp_image_size->width  = (int)pipe->param.image_size;
+    nppGetStreamContext(npp_ctx);
+    npp_ctx->hStream       = pipe->stream.gridding;
+    cudaStreamGetFlags(npp_ctx->hStream, &npp_ctx->nStreamFlags);
+    nppiMaxGetBufferHostSize_32f_C1R_Ctx(*npp_image_size, &pipe->wrkspc.npp.sz, *npp_ctx);
+    return cudaSuccess;
+}
+
+static cufftResult   fip_pipe_cuda_plan_fft                  (fip_pipeline_cuda_state* pipe,
+                                                              cufftHandle*             plan){
+    cufftResult cufftError;
+
+    /**
+     * cuFFT Advanced Data Layout (ADL) Parameters.
+     *
+     * These are not cited where they should be [1], but quoting [2]:
+     *
+     *     Advanced parameters are defined in units of the relevant data type
+     *     (cufftReal, cufftDoubleReal, cufftComplex, or cufftDoubleComplex).
+     *
+     *     Advanced layout can be perceived as an additional layer of abstraction
+     *     above the access to input/output data arrays. An element of coordinates
+     *     [z][y][x] in signal number b in the batch will be associated with the
+     *     following addresses in the memory:
+     *
+     *         1D
+     *              input [b * idist + x * istride]
+     *              output[b * odist + x * ostride]
+     *
+     *         2D
+     *              input [b * idist +  (x * inembed[1] + y) * istride]
+     *              output[b * odist +  (x * onembed[1] + y) * ostride]
+     *
+     *         3D
+     *              input [b * idist + ((x * inembed[1] + y) * inembed[2] + z) * istride]
+     *              output[b * odist + ((x * onembed[1] + y) * onembed[2] + z) * ostride]
+     *
+     *
+     * [1]: https://docs.nvidia.com/cuda/cufft/index.html#c.cufftPlanMany
+     * [2]: https://docs.nvidia.com/cuda/cufft/index.html#advanced-data-layout
+     */
+
+    int n[2]       = {(int)pipe->param.grid_size,
+                      (int)pipe->param.grid_size};
+    int strides[2] = {0,
+                      (int)(pipe->ring.stride.grid/sizeof(float))};
+
+    if((cufftError = cufftCreate(plan))){
+        fprintf(stderr, "Cannot create cuFFT plan! (%d)\n", (int)cufftError);
+        return cufftError;
+    }
+    if((cufftError = cufftSetStream(*plan, pipe->stream.fft))){
+        fprintf(stderr, "Cannot assign stream to cuFFT plan! (%d)\n", (int)cufftError);
+        return cufftError;
+    }
+    if((cufftError = cufftPlanMany(plan, 2, n, strides, 1, 0,
+                                               strides, 1, 0, CUFFT_C2C, 1))){
+        fprintf(stderr, "Cannot make cuFFT plan for grid of size %zu (%d)\n",
+                        pipe->param.grid_size, (int)cufftError);
+        return cufftError;
+    }
+    return CUFFT_SUCCESS;
+}
+
+static cudaError     fip_pipe_cuda_free_mem                  (fip_pipeline_cuda_state* pipe){
+    cudaFree    (pipe->ring.vis_bin_gpu);
+    cudaFree    (pipe->ring.transform_gpu);
+    cudaFree    (pipe->ring.grid_gpu);
+    cudaFree    (pipe->ring.image_gpu);
+    cudaFree    (pipe->ring.result_gpu);
+
+    cudaFree    (pipe->wrkspc.npp.ptr);
+    cudaFree    (pipe->wrkspc.cufft.ptr);
+    cudaFree    (pipe->wrkspc.conv_corr_kernel);
+    cudaFree    (pipe->ring.max_gpu);
+
+    cudaFreeHost(pipe->ring.vis_bin_pinned);
+    cudaFreeHost(pipe->ring.transform_pinned);
+    cudaFreeHost(pipe->ring.result_pinned);
+
+    return cudaSuccess;
+}
+
+static cudaError     fip_pipe_cuda_alloc_mem                 (fip_pipeline_cuda_state* pipe){
+    cudaError_t cudaError;
+
+    size_t num_baselines       = pipe->param.num_baselines;
+    size_t grid_size           = pipe->param.grid_size;
+    size_t image_size          = pipe->param.image_size;
+    size_t unit_num            = pipe->param.unit_num;
+
+    pipe->ring.depth.vis_bin   = 2;
+    pipe->ring.depth.transform = 2;
+    pipe->ring.depth.grid      = 3;
+    pipe->ring.depth.image     = 5;
+    pipe->ring.depth.result    = 2;
+
+    cudaMallocPitch(&pipe->ring.vis_bin_gpu,
+                    &pipe->ring.stride.vis_bin,
+                    num_baselines * sizeof(float) * 2,
+                    pipe->ring.depth.vis_bin * 2);
+    cudaMallocPitch(&pipe->ring.transform_gpu,
+                    &pipe->ring.stride.transform,
+                    3 * 3 * sizeof(float),
+                    pipe->ring.depth.transform);
+    cudaMallocPitch(&pipe->ring.grid_gpu,
+                    &pipe->ring.stride.grid,
+                    grid_size     * sizeof(float) * 2,
+                    pipe->ring.depth.grid  * grid_size);
+    cudaMallocPitch(&pipe->ring.image_gpu,
+                    &pipe->ring.stride.image,
+                    image_size    * sizeof(float),
+                    pipe->ring.depth.image * image_size);
+    cudaMallocPitch(&pipe->ring.result_gpu,
+                    &pipe->ring.stride.result,
+                    unit_num      * sizeof(float),
+                    pipe->ring.depth.result * unit_num);
+
+    cudaMalloc     (&pipe->wrkspc.npp.ptr,              pipe->wrkspc.npp.sz);
+    cudaMalloc     (&pipe->wrkspc.cufft.ptr,            pipe->wrkspc.cufft.sz);
+    cudaMalloc     (&pipe->wrkspc.conv_corr_kernel,     (image_size/2+1)                                 * sizeof(float));
+    cudaMalloc     (&pipe->ring.max_gpu,                pipe->ring.depth.image                           * sizeof(float));
+
+    cudaMallocHost (&pipe->ring.vis_bin_pinned,         pipe->ring.depth.vis_bin * num_baselines * (2+2) * sizeof(float));
+    cudaMallocHost (&pipe->ring.transform_pinned,       pipe->ring.depth.transform *       3 *         3 * sizeof(float));
+    cudaMallocHost (&pipe->ring.result_pinned,          pipe->ring.depth.result  * unit_num  *  unit_num * sizeof(float));
+
+    if((cudaError = cudaGetLastError())){
+        fprintf(stderr, "ERROR! Failed to allocate memmory.\n"
+                        "CUDA error code: %d; string: %s;\n",
+                        (int)cudaError,
+                        cudaGetErrorString(cudaError));
+        fip_pipe_cuda_free_mem(pipe);
+    }
+
+    return cudaError;
+}
+
+static void          fip_pipe_cuda_stage_data_read           (void* const p){
+    fip_pipeline_cuda_state* pipe = (fip_pipeline_cuda_state*)p;
     (void)pipe;
-    (void)input;
-    (void)output;
-    (void)snap_start;
-    (void)snap_count;
-    (void)num_baselines;
-    (void)image_size;
-    (void)cell_size;
-    (void)unit_size;
-    (void)unit_num;
+}
+
+static void          fip_pipe_cuda_stage_data_write          (void* const p){
+    fip_pipeline_cuda_state* pipe = (fip_pipeline_cuda_state*)p;
+    (void)pipe;
+}
+
+static float*        fip_pipe_cuda_calc_ring_vis_pinned      (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.vis_bin;
+    return (float*)((char*)
+         pipe->ring.vis_bin_pinned +
+         pipe->ring.stride.vis_bin * i *
+         pipe->param.grid_size
+    );
+}
+
+static float*        fip_pipe_cuda_calc_ring_vis_gpu         (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.vis_bin;
+    return (float*)((char*)pipe->ring.vis_bin_gpu +
+                           pipe->ring.stride.vis_bin * i *
+                           pipe->param.grid_size);
+}
+
+static float       (*fip_pipe_cuda_calc_ring_transform_pinned(fip_pipeline_cuda_state* pipe, size_t i))[3]{
+    i %= pipe->ring.depth.transform;
+    return (float(*)[3])pipe->ring.transform_pinned + 3*i;
+}
+
+static float       (*fip_pipe_cuda_calc_ring_transform_gpu   (fip_pipeline_cuda_state* pipe, size_t i))[3]{
+    i %= pipe->ring.depth.transform;
+    return (float(*)[3])((char*)pipe->ring.transform_gpu +
+                                pipe->ring.stride.transform * i);
+}
+
+static cufftComplex* fip_pipe_cuda_calc_ring_grid_gpu        (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.grid;
+    return (cufftComplex*)((char*)pipe->ring.grid_gpu +
+                                  pipe->ring.stride.grid * i *
+                                  pipe->param.grid_size);
+}
+
+static float*        fip_pipe_cuda_calc_ring_max_gpu         (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.image;
+    return (float*)pipe->ring.max_gpu + i;
+}
+
+static float*        fip_pipe_cuda_calc_ring_image_gpu       (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.image;
+    return (float*)((char*)pipe->ring.image_gpu +
+                           pipe->ring.stride.image * i *
+                           pipe->param.image_size);
+}
+
+static float*        fip_pipe_cuda_calc_ring_result_gpu      (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.result;
+    return (float*)((char*)pipe->ring.result_gpu +
+                           pipe->ring.stride.result * i *
+                           pipe->param.unit_num);
+}
+
+static float*        fip_pipe_cuda_calc_ring_result_pinned   (fip_pipeline_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.result;
+    return (float*)pipe->ring.result_pinned +
+                   pipe->param.unit_num * i *
+                   pipe->param.unit_num;
+}
+
+int                  fip_pipe_cuda                           (fip_pipeline_cuda_state* pipe,
+                                                              fitsfile* const          input,
+                                                              fitsfile* const          output,
+                                                              const size_t             snap_start,
+                                                              const size_t             snap_end){
+    const size_t     num_baselines = pipe->param.num_baselines;
+    const size_t     grid_size     = pipe->param.grid_size;
+    const float      cell_size     = pipe->param.cell_size;
+    const size_t     image_size    = pipe->param.image_size;
+    const size_t     unit_size     = pipe->param.unit_size;
+    const size_t     unit_num      = pipe->param.unit_num;
+
+    const float      conv_corr_norm_factor = 2.4937047051153827;
+    const float      C                     = 1e-6;
+
+    cudaError_t      cudaError;
+
+    cufftHandle      cufft_plan;
+
+    NppStreamContext npp_ctx;
+    NppiSize         npp_image_size;
+
+    size_t           i;
+    int              status = 0;
+
+
+    /**
+     * Device Selection and Property Query
+     */
+
+    if(fip_pipe_cuda_select_device(pipe))
+        return -1;
+#if 1
+    if(1){
+        printf("Selected GPU %d: %s (UUID: %s, PCIe %s)\n",
+               pipe->device.ordinal,
+               pipe->device.name,
+               pipe->device.uuid,
+               pipe->device.pci);
+    }
+#endif
+
+
+    /**
+     * CUDA Stream creation
+     */
+
+    if((cudaError = cudaStreamCreateWithFlags(&pipe->stream.data_read,     cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.copy_gpu,      cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.gridding,      cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.fft,           cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.interpolation, cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.tlisi,         cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.copy_cpu,      cudaStreamNonBlocking)) ||
+       (cudaError = cudaStreamCreateWithFlags(&pipe->stream.data_write,    cudaStreamNonBlocking))){
+        fprintf(stderr, "Cannot create CUDA stream on selected device! %s (%d)\n",
+                        cudaGetErrorString(cudaError),
+                        (int)cudaError);
+        return -1;
+    }
+
+
+    /**
+     * CUDA Event creation
+     *
+     * Also initiate detailed timing here.
+     */
+
+
+    /**
+     * Plan CUDA kernel launch parameters.
+     */
+
+    fip_pipe_cuda_plan_launch(pipe);
+
+
+    /**
+     * NPP Context initialization
+     */
+
+    if(fip_pipe_cuda_plan_npp(pipe, &npp_image_size, &npp_ctx))
+        return -1;
+
+
+    /**
+     * Ring Buffer and Miscellaneous memory allocations and initializations.
+     */
+
+    if(fip_pipe_cuda_alloc_mem(pipe))
+        return -1;
+
+
+    /**
+     * cuFFT Plan creation
+     */
+
+    if(fip_pipe_cuda_plan_fft(pipe, &cufft_plan))
+        return -1;
+
+
+    /**
+     * Main Loop
+     *
+     * Begin by calculating the coefficients of a convolution kernel that are static
+     * for the entire duration of the loop.
+     */
+
+    convolveKernel          <<<pipe->launch.Bk,
+                               pipe->launch.Tk, 0,
+                               pipe->stream.interpolation>>>
+                                (pipe->wrkspc.conv_corr_kernel, image_size,
+                                 grid_size, conv_corr_norm_factor);
+
+    for(i=snap_start; i<snap_end; i++){
+        /* Stream data_read */
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.data_read);
+        cudaLaunchHostFunc      (pipe->stream.data_read,     fip_pipe_cuda_stage_data_read, pipe);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.data_read);
+
+
+        /* Stream copy_gpu */
+        cudaStreamWaitEvent     (pipe->stream.copy_gpu,      pipe->evt.loopstart, 0);
+        cudaMemcpyAsync         (fip_pipe_cuda_calc_ring_transform_gpu   (pipe, i),
+                                 fip_pipe_cuda_calc_ring_transform_pinned(pipe, i),
+                                 3 * 3 * sizeof(float),
+                                 cudaMemcpyHostToDevice,
+                                 pipe->stream.copy_gpu);
+        cudaMemcpy2DAsync       (fip_pipe_cuda_calc_ring_vis_gpu         (pipe, i),
+                                 pipe->ring.stride.vis_bin,
+                                 fip_pipe_cuda_calc_ring_vis_pinned      (pipe, i),
+                                 num_baselines * 2 * sizeof(float),
+                                 num_baselines * 2 * sizeof(float), 2,
+                                 cudaMemcpyHostToDevice,
+                                 pipe->stream.copy_gpu);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.copy_gpu);
+
+
+        /* Stream gridding */
+        cudaStreamWaitEvent     (pipe->stream.gridding,      pipe->evt.loopstart, 0);
+        cudaMemsetAsync         (fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i), 0,
+                                 pipe->ring.stride.grid * grid_size,
+                                 pipe->stream.gridding);
+        fused_gridding      <<<pipe->launch.Bg,
+                               pipe->launch.Tg, 0,
+                               pipe->stream.gridding>>>
+                                (fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
+                                 pipe->ring.stride.grid,
+                                 fip_pipe_cuda_calc_ring_vis_gpu         (pipe, i), // Vis_real, Vis_imag, Bin
+                                 pipe->ring.stride.vis_bin,
+                                 fip_pipe_cuda_calc_ring_transform_gpu   (pipe, i), // V
+                                 cell_size * grid_size,
+                                 grid_size,
+                                 num_baselines);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.gridding);
+
+
+        /* Stream fft */
+        cudaStreamWaitEvent     (pipe->stream.fft,           pipe->evt.loopstart, 0);
+        cufftExecC2C            (cufft_plan,
+                                 fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
+                                 fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
+                                 CUFFT_INVERSE);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.fft);
+
+
+        /* Stream interpolation */
+        cudaStreamWaitEvent     (pipe->stream.interpolation, pipe->evt.loopstart, 0);
+        cudaMemsetAsync         (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i), 0,
+                                 pipe->ring.stride.grid * grid_size,
+                                 pipe->stream.interpolation);
+        fused_interpolation <<<pipe->launch.Bs,
+                               pipe->launch.Ts, 0,
+                               pipe->stream.interpolation>>>
+                                (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i),
+                                 fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
+                                 fip_pipe_cuda_calc_ring_transform_gpu   (pipe, i),
+                                 cell_size, image_size, grid_size,
+                                 pipe->wrkspc.conv_corr_kernel,
+                                 conv_corr_norm_factor,
+                                 1.0f/num_baselines);
+        nppiMax_32f_C1R_Ctx     (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i),
+                                 pipe->ring.stride.image,
+                                 npp_image_size,
+                                 (Npp8u*)pipe->wrkspc.npp.ptr,
+                                 fip_pipe_cuda_calc_ring_max_gpu         (pipe, i),
+                                 npp_ctx);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.interpolation);
+
+
+        /**
+         * Decision point:
+         *     If fewer than 3 snapshots, we cannot yet proceed with remaining
+         *     stages of the processing pipeline.
+         */
+
+        if(i < snap_start+2)
+            continue;
+
+
+        /* Stream tlisi */
+        cudaStreamWaitEvent     (pipe->stream.tlisi,         pipe->evt.loopstart, 0);
+        fip_pipe_cuda_tlisi <<<pipe->launch.Bt,
+                               pipe->launch.Tt,
+                               pipe->launch.St,
+                               pipe->stream.tlisi>>>
+                                (fip_pipe_cuda_calc_ring_result_gpu      (pipe, i),
+                                 pipe->ring.stride.result,
+                                 fip_pipe_cuda_calc_ring_image_gpu       (pipe, i),
+                                 fip_pipe_cuda_calc_ring_max_gpu         (pipe, i),
+                                 fip_pipe_cuda_calc_ring_image_gpu       (pipe, i-1),
+                                 fip_pipe_cuda_calc_ring_max_gpu         (pipe, i-1),
+                                 fip_pipe_cuda_calc_ring_image_gpu       (pipe, i-2),
+                                 fip_pipe_cuda_calc_ring_max_gpu         (pipe, i-2),
+                                 pipe->ring.stride.image,
+                                 image_size, unit_size, unit_num, C);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.tlisi);
+
+
+        /* Stream copy_cpu */
+        cudaStreamWaitEvent     (pipe->stream.copy_cpu,      pipe->evt.loopstart, 0);
+        cudaMemcpy2DAsync       (fip_pipe_cuda_calc_ring_result_pinned   (pipe, i),
+                                 unit_num * sizeof(float),
+                                 fip_pipe_cuda_calc_ring_result_gpu      (pipe, i),
+                                 pipe->ring.stride.result,
+                                 unit_num * sizeof(float), unit_num,
+                                 cudaMemcpyDeviceToHost,
+                                 pipe->stream.copy_cpu);
+        cudaEventRecord         (pipe->evt.loopstart,        pipe->stream.copy_cpu);
+
+
+        /* Stream data_write */
+        cudaStreamWaitEvent     (pipe->stream.data_write,    pipe->evt.loopstart, 0);
+        cudaLaunchHostFunc      (pipe->stream.data_write,    fip_pipe_cuda_stage_data_write, pipe);
+        cudaEventRecord         (pipe->evt.loopend,          pipe->stream.data_write);
+    }
+
+
+    cudaStreamSynchronize(pipe->stream.data_read);
+    cudaStreamSynchronize(pipe->stream.copy_gpu);
+    cudaStreamSynchronize(pipe->stream.gridding);
+    cudaStreamSynchronize(pipe->stream.fft);
+    cudaStreamSynchronize(pipe->stream.interpolation);
+    cudaStreamSynchronize(pipe->stream.tlisi);
+    cudaStreamSynchronize(pipe->stream.copy_cpu);
+    cudaStreamSynchronize(pipe->stream.data_write);
+
+    fits_flush_file(output, &status);
+
+    cufftDestroy(cufft_plan);
+
+    cudaStreamDestroy(pipe->stream.data_read);
+    cudaStreamDestroy(pipe->stream.copy_gpu);
+    cudaStreamDestroy(pipe->stream.gridding);
+    cudaStreamDestroy(pipe->stream.fft);
+    cudaStreamDestroy(pipe->stream.interpolation);
+    cudaStreamDestroy(pipe->stream.tlisi);
+    cudaStreamDestroy(pipe->stream.copy_cpu);
+    cudaStreamDestroy(pipe->stream.data_write);
+
+    fip_pipe_cuda_free_mem(pipe);
+
     return 0;
 }
