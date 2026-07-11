@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "utils.h"
+#include "fits-utils.h"
 #include "fip-pipeline-cuda-state.h"
 
 

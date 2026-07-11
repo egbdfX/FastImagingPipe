@@ -1,6 +1,6 @@
 /* Include Guard */
-#ifndef SRC_UTILS_H
-#define SRC_UTILS_H
+#ifndef SRC_FITS_UTILS_H
+#define SRC_FITS_UTILS_H
 
 
 

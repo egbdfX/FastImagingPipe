@@ -6,7 +6,7 @@ subdir('tools')
 ## Replacement tool "fip" with verbs interface.
 fip = executable('fip',
     fip_tools_src + files(
-        'utils.c',
+        'fits-utils.c',
         'FIPkernels.cu',
     ),
     cuda_args:     cuda_flags + ['-Xcompiler=-fPIC', '--use_fast_math', '-lineinfo'],

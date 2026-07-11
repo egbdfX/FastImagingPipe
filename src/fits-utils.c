@@ -5,7 +5,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include "utils.h"
+#include "fits-utils.h"
 
 
 /* Defines */

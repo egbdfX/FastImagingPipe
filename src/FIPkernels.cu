@@ -8,7 +8,7 @@
 #include <math_constants.h>
 #include <npp.h>
 
-#include "utils.h"
+#include "fits-utils.h"
 #include "fip-pipeline-cuda-state.h"
 
 
