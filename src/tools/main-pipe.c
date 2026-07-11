@@ -5,6 +5,8 @@
 
 #include <popt.h>
 #include <fitsio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "utils.h"
 #include "fip-pipeline-cuda-state.h"
@@ -27,15 +29,33 @@
 typedef struct{
     struct{
         int       status;
-        fitsfile* transform;
-        fitsfile* visibilities;
-        fitsfile* coordinates;
+        int       fd;
+        long long transform_off;
+        long long visibilities_off;
+        long long coords_off;
     } input;
     struct{
         int       status;
         fitsfile* result;
     } output;
 } fip_pipe_iter_state;
+
+static ssize_t pread_reliable(int fd, void* buf, size_t count, off_t offset){
+    ssize_t breadt;
+    ssize_t bread = 0;
+    char*   bufc  = buf;
+
+    while(bread < (ssize_t)count){
+        breadt = pread(fd, bufc+bread, count-(size_t)bread, offset+bread);
+        if(breadt <= 0){
+            return bread>0 ? bread : breadt;
+        }else{
+            bread += breadt;
+        }
+    }
+
+    return bread;
+}
 
 static void input_cb (void*  userdata0,
                       void*  userdata1,
@@ -44,20 +64,36 @@ static void input_cb (void*  userdata0,
                       float  transform[3][3],
                       size_t num_baselines,
                       size_t iter){
-    fip_pipe_iter_state* state = (fip_pipe_iter_state*)userdata0;
+    uint32_t             x;
+    size_t               i;
+    size_t               transform_count    = 3 * 3;
+    size_t               visibilities_count = 2 * num_baselines;
+    size_t               coords_count       = 2 * num_baselines;
+    size_t               transform_bytes    = transform_count    * sizeof(float);
+    size_t               visibilities_bytes = visibilities_count * sizeof(float);
+    size_t               coords_bytes       = coords_count       * sizeof(float);
+    fip_pipe_iter_state* state              = (fip_pipe_iter_state*)userdata0;
     (void)userdata1;
 
-    long fvis[3] = {1, 1,             iter+1};
-    long lvis[3] = {2, num_baselines, iter+1};
-    long fcor[3] = {1, 1,             iter+1};
-    long lcor[3] = {2, num_baselines, iter+1};
-    long fxfm[3] = {1, 1,             iter+1};
-    long lxfm[3] = {3, 3,             iter+1};
-    long inc[3]  = {1, 1,             1};
+    pread_reliable(state->input.fd, transform,     transform_bytes,
+                   state->input.transform_off    + transform_bytes    * iter);
+    pread_reliable(state->input.fd, visibilities,  visibilities_bytes,
+                   state->input.visibilities_off + visibilities_bytes * iter);
+    pread_reliable(state->input.fd, coords,        coords_bytes,
+                   state->input.coords_off       + coords_bytes       * iter);
 
-    fits_read_subset(state->input.transform,     TFLOAT, fxfm, lxfm, inc, NULL, transform,    NULL, &state->input.status);
-    fits_read_subset(state->input.visibilities,  TFLOAT, fvis, lvis, inc, NULL, visibilities, NULL, &state->input.status);
-    fits_read_subset(state->input.coordinates,   TFLOAT, fcor, lcor, inc, NULL, coords,       NULL, &state->input.status);
+    for(i=0; i<transform_count; i++){
+        memcpy(&x, &((float*)transform)[i],    sizeof(uint32_t)); x = __builtin_bswap32(x);
+        memcpy(&((float*)transform)[i], &x,    sizeof(uint32_t));
+    }
+    for(i=0; i<visibilities_count; i++){
+        memcpy(&x, &((float*)visibilities)[i], sizeof(uint32_t)); x = __builtin_bswap32(x);
+        memcpy(&((float*)visibilities)[i], &x, sizeof(uint32_t));
+    }
+    for(i=0; i<coords_count; i++){
+        memcpy(&x, &coords[i],                 sizeof(uint32_t)); x = __builtin_bswap32(x);
+        memcpy(&coords[i], &x,                 sizeof(uint32_t));
+    }
 
     if(state->input.status){
         fits_report_error(stderr, state->input.status);
@@ -103,7 +139,7 @@ int main_pipe(int argc, char* argv[]){
     fitsfile* output          = NULL;
     char*     output_name     = (char*)"output.fits";
 
-    fip_pipe_iter_state state = {{0, NULL, NULL, NULL}, {0, NULL}};
+    fip_pipe_iter_state state = {{0, -1, 0, 0, 0}, {0, NULL}};
 
 
     long long image_size      = 1024;
@@ -415,16 +451,17 @@ int main_pipe(int argc, char* argv[]){
 
 
     /* Execute Pipeline */
-    fits_reopen_file(input, &state.input.transform,     &fits_status);
-    fits_reopen_file(input, &state.input.visibilities,  &fits_status);
-    fits_reopen_file(input, &state.input.coordinates,   &fits_status);
-    fits_movabs_hdu (state.input.transform,    2, NULL, &fits_status);
-    fits_movabs_hdu (state.input.visibilities, 3, NULL, &fits_status);
-    fits_movabs_hdu (state.input.coordinates,  4, NULL, &fits_status);
+    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
+    fits_get_hduaddrll(input, NULL, &state.input.transform_off,    NULL, &fits_status);
+    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
+    fits_get_hduaddrll(input, NULL, &state.input.visibilities_off, NULL, &fits_status);
+    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
+    fits_get_hduaddrll(input, NULL, &state.input.coords_off,       NULL, &fits_status);
+    state.input.fd      = open(input_name, O_RDONLY|O_NOCTTY|O_CLOEXEC, 0);
     state.input.status  = 0;
     state.output.status = 0;
     state.output.result = output;
-    if(fits_status)
+    if(fits_status || state.input.fd<0)
         goto fitsfail;
 
     fip_pipe_cuda_state pipe;
@@ -440,12 +477,11 @@ int main_pipe(int argc, char* argv[]){
         fits_report_error(stderr, fits_status);
         rc = EXIT_FAILURE;
     }
-    if(state.input.transform)
-        fits_close_file(state.input.transform,    &fits_status), state.input.transform    = NULL;
-    if(state.input.visibilities)
-        fits_close_file(state.input.visibilities, &fits_status), state.input.visibilities = NULL;
-    if(state.input.coordinates)
-        fits_close_file(state.input.coordinates,  &fits_status), state.input.coordinates  = NULL;
+    if(state.input.fd>=0){
+        close(state.input.fd);
+    }else{
+        rc = EXIT_FAILURE;
+    }
     if(input)
         fits_close_file(input,  &fits_status), input  = NULL;
     if(output)
