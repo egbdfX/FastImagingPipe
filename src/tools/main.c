@@ -16,7 +16,6 @@ int main(int argc, char** argv){
         return EXIT_FAILURE;
     }
 
-    VERB(oldpipe);
     VERB(pipe);
 
     fprintf(stderr, "Unknown verb \"%s\"", argv[1]);
