@@ -11,6 +11,6 @@ fip = executable('fip',
         'fits-utils.c',
     ),
     cuda_args:     cuda_flags + ['-Xcompiler=-fPIC', '--use_fast_math', '-lineinfo'],
-    dependencies:  [popt, cfitsio, cufft, nppc, nppial, nppist, nppitc],
+    dependencies:  [popt, cfitsio, cufft, nppc, nppist],
     install:       false,
 )
