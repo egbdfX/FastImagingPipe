@@ -47,6 +47,7 @@ typedef void (*fip_pipe_cuda_output_cb)(void*  userdata0,
 /* Function Prototypes */
 int  fip_pipe_cuda_alloc(fip_pipe_cuda_state**    pipe_ptr,
                          const int                verbose,
+                         const int                gpu_ordinal,
                          const size_t             num_baselines,
                          const size_t             image_size,
                          const float              cell_size,

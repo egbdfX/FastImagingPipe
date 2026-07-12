@@ -296,6 +296,7 @@ static size_t        ceiling_divide(size_t a, size_t b) {
 
 int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_state**    pipe_ptr,
                                                               const int                verbose,
+                                                              const int                gpu_ordinal,
                                                               const size_t             num_baselines,
                                                               const size_t             image_size,
                                                               const float              cell_size,
@@ -307,6 +308,7 @@ int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_stat
         return -1;
 
     pipe->param.verbose       = verbose;
+    pipe->device.ordinal      = gpu_ordinal;
     pipe->param.num_baselines = num_baselines;
     pipe->param.grid_size     = (image_size*3+1)/2; // * 1.5, rounding up;
     pipe->param.image_size    = image_size;
@@ -331,8 +333,8 @@ void                 fip_pipe_cuda_clear                     (fip_pipe_cuda_stat
 static cudaError_t   fip_pipe_cuda_select_device             (fip_pipe_cuda_state*     pipe){
     cudaError_t cudaError;
 
-    if((cudaError = cudaGetDevice(&pipe->device.ordinal))){
-        fprintf(stderr, "Cannot find CUDA device: %s (%d)\n",
+    if((cudaError = cudaSetDevice(pipe->device.ordinal))){
+        fprintf(stderr, "Cannot set CUDA device: %s (%d)\n",
                 cudaGetErrorString(cudaError),
                 (int)cudaError);
         return cudaError;
