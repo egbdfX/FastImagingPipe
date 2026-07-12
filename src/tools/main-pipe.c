@@ -17,6 +17,8 @@
 #define  END_OFFSET_FLAG         3
 #define  SNAP_COUNT_GE_3_FLAG    4
 #define  NUM_BASELINES_FLAG      5
+#define  VERBOSE_FLAG            6
+#define  QUIET_FLAG              7
 
 #define  NUM_BASELINES_FLAG_DEFAULT      -1
 #define  START_OFFSET_FLAG_DEFAULT       -1
@@ -155,6 +157,7 @@ int main_pipe(int argc, char* argv[]){
     long long snap_start_final   = 0;
     long long snap_end_final     = 0;
     long long snap_count_final   = 0;
+    int       verbose         = 0;
 
 
     /**
@@ -173,6 +176,8 @@ int main_pipe(int argc, char* argv[]){
         {"num-baselines", 'b', POPT_ARG_LONGLONG, &num_baselines, 0,                     "Number of baselines",        "N"},
         {"cell-size",     'C', POPT_ARG_FLOAT,    &cell_size,     0,                     "Cell Size",                  "F>0.0"},
         {"unit-size",     'u', POPT_ARG_LONGLONG, &unit_size,     0,                     "Unit Size",                  "N"},
+        {"verbose",       'v', POPT_ARG_NONE,     NULL,           VERBOSE_FLAG,          "Increase logging verbosity", NULL},
+        {"quiet",         'q', POPT_ARG_NONE,     NULL,           QUIET_FLAG,            "Decrease logging verbosity", NULL},
         {NULL,             0,  POPT_ARG_NONE,     NULL,           0,                     NULL,                         NULL},
     };
     struct poptAlias help_alias = {NULL, '?', 0, NULL};
@@ -235,6 +240,14 @@ int main_pipe(int argc, char* argv[]){
                     rc = EXIT_FAILURE;
                     goto poptfail;
                 }
+                break;
+            case VERBOSE_FLAG:           /* --verbose, -v */
+                if(verbose <= INT_MAX-10)
+                    verbose += 10;
+                break;
+            case QUIET_FLAG:             /* --quiet,   -q */
+                if(verbose >= INT_MIN+10)
+                    verbose -= 10;
                 break;
             default:
                 fprintf(stderr, "%s: %s (%d)\n",
@@ -465,7 +478,7 @@ int main_pipe(int argc, char* argv[]){
     if(fits_status || state.input.fd<0)
         goto fitsfail;
 
-    if(fip_pipe_cuda_alloc(&pipe, num_baselines, image_size, cell_size, unit_size, unit_num))
+    if(fip_pipe_cuda_alloc(&pipe, verbose, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto cudafail;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
                              snap_start_final, snap_end_final);

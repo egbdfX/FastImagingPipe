@@ -56,6 +56,7 @@ struct fip_pipe_cuda_state{
      */
 
     struct{
+        int    verbose;
         size_t num_baselines;
         size_t image_size;
         float  cell_size;
@@ -294,6 +295,7 @@ static size_t        ceiling_divide(size_t a, size_t b) {
 /* FIP CUDA pipeline functions */
 
 int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_state**    pipe_ptr,
+                                                              const int                verbose,
                                                               const size_t             num_baselines,
                                                               const size_t             image_size,
                                                               const float              cell_size,
@@ -304,6 +306,7 @@ int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_stat
     if(!pipe_ptr || !(*pipe_ptr = pipe = calloc(1, sizeof(*pipe))))
         return -1;
 
+    pipe->param.verbose       = verbose;
     pipe->param.num_baselines = num_baselines;
     pipe->param.grid_size     = (image_size*3+1)/2; // * 1.5, rounding up;
     pipe->param.image_size    = image_size;
@@ -376,15 +379,13 @@ static cudaError_t   fip_pipe_cuda_select_device             (fip_pipe_cuda_stat
         return cudaErrorInvalidValue;
     }
 
-#if 1
-    if(1){
+    if(pipe->param.verbose >= 10){
         printf("Selected GPU %d: %s (UUID: %s, PCIe %s)\n",
                pipe->device.ordinal,
                pipe->device.name,
                pipe->device.uuid,
                pipe->device.pci);
     }
-#endif
 
     return cudaSuccess;
 }
@@ -766,6 +767,38 @@ static cufftResult   fip_pipe_cuda_plan_fft                  (fip_pipe_cuda_stat
         return cufftError;
     }
     return CUFFT_SUCCESS;
+}
+
+static void          fip_pipe_cuda_dump_timings              (fip_pipe_cuda_state*     pipe){
+    float milliseconds;
+
+    if(pipe->param.verbose < 20)
+        return;
+
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_START],
+                                        pipe->events.iter[2][ITER_DATA_READ]);
+    printf("Time elapsed (Data Read):                   %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_DATA_READ],
+                                        pipe->events.iter[2][ITER_COPY_GPU]);
+    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_GPU],
+                                        pipe->events.iter[2][ITER_GRIDDING]);
+    printf("Time elapsed (Gridding):                    %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_GRIDDING],
+                                        pipe->events.iter[2][ITER_FFT]);
+    printf("Time elapsed (FFT):                         %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_FFT],
+                                        pipe->events.iter[2][ITER_INTERP]);
+    printf("Time elapsed (Interpolation):               %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_INTERP],
+                                        pipe->events.iter[2][ITER_TLISI]);
+    printf("Time elapsed (tLISI):                       %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_TLISI],
+                                        pipe->events.iter[2][ITER_COPY_CPU]);
+    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
+    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_CPU],
+                                        pipe->events.iter[2][ITER_DATA_WRITE]);
+    printf("Time elapsed (Data Write):                  %10.6f ms\n", (double)milliseconds);
 }
 
 static cudaError_t   fip_pipe_cuda_free_mem                  (fip_pipe_cuda_state*     pipe){
@@ -1239,35 +1272,9 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
     cudaStreamDestroy(pipe->stream.copy_cpu);
     cudaStreamDestroy(pipe->stream.data_write);
 
-    fip_pipe_cuda_free_mem(pipe);
-    fip_pipe_cuda_record  (pipe, 0, PIPE_END, 0, 0);
-
-    float milliseconds;
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_START],
-                                        pipe->events.iter[2][ITER_DATA_READ]);
-    printf("Time elapsed (Data Read):                   %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_DATA_READ],
-                                        pipe->events.iter[2][ITER_COPY_GPU]);
-    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_GPU],
-                                        pipe->events.iter[2][ITER_GRIDDING]);
-    printf("Time elapsed (Gridding):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_GRIDDING],
-                                        pipe->events.iter[2][ITER_FFT]);
-    printf("Time elapsed (FFT):                         %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_FFT],
-                                        pipe->events.iter[2][ITER_INTERP]);
-    printf("Time elapsed (Interpolation):               %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_INTERP],
-                                        pipe->events.iter[2][ITER_TLISI]);
-    printf("Time elapsed (tLISI):                       %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_TLISI],
-                                        pipe->events.iter[2][ITER_COPY_CPU]);
-    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_CPU],
-                                        pipe->events.iter[2][ITER_DATA_WRITE]);
-    printf("Time elapsed (Data Write):                  %10.6f ms\n", (double)milliseconds);
-
+    fip_pipe_cuda_free_mem      (pipe);
+    fip_pipe_cuda_record        (pipe, 0, PIPE_END, 0, 0);
+    fip_pipe_cuda_dump_timings  (pipe);
     fip_pipe_cuda_destroy_events(pipe);
 
     return 0;
