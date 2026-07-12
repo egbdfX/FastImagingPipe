@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "fits-utils.h"
-#include "fip-pipeline-cuda-state.h"
+#include "fip-pipe-cuda.h"
 
 
 #define  HELP_FLAG               1
@@ -139,6 +139,7 @@ int main_pipe(int argc, char* argv[]){
     fitsfile* output          = NULL;
     char*     output_name     = (char*)"output.fits";
 
+    fip_pipe_cuda_state* pipe = NULL;
     fip_pipe_iter_state state = {{0, -1, 0, 0, 0}, {0, NULL}};
 
 
@@ -464,18 +465,20 @@ int main_pipe(int argc, char* argv[]){
     if(fits_status || state.input.fd<0)
         goto fitsfail;
 
-    fip_pipe_cuda_state pipe;
-    fip_pipe_cuda_init(&pipe, num_baselines, image_size, cell_size, unit_size, unit_num);
-    rc = fip_pipe_cuda(&pipe, input_cb, output_cb, &state, NULL,
-                              snap_start_final, snap_end_final);
+    if(fip_pipe_cuda_alloc(&pipe, num_baselines, image_size, cell_size, unit_size, unit_num))
+        goto cudafail;
+    rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
+                             snap_start_final, snap_end_final);
+    fip_pipe_cuda_clear(&pipe);
+
     fits_flush_file(output, &fits_status);
 
 
     /* Clean up and exit */
+    cudafail:
     fitsfail:
     if(fits_status){
         fits_report_error(stderr, fits_status);
-        rc = EXIT_FAILURE;
     }
     if(state.input.fd>=0){
         close(state.input.fd);
