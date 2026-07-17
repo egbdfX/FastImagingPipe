@@ -19,6 +19,9 @@ add_project_arguments     ('-Wno-deprecated-gpu-targets',   language: 'cuda')
 add_project_link_arguments('-Wno-deprecated-gpu-targets',   language: 'cuda')
 
 
+fs            = import('fs')
+py_mod        = import('python')
+py            = py_mod.find_installation()
 cuda_mod      = import('unstable-cuda')
 nvcc_version  = meson.get_compiler('cuda').version()
 cuda_target   = get_option('gpu_arch')
@@ -38,11 +41,10 @@ nppist  = dependency('cuda',    modules: ['nppist'] + cudart, required: true)
 cfitsio = dependency('cfitsio',                               required: false,
                      fallback: ['cfitsio', 'cfitsio_dep'],
                      default_options: ['warning_level=0'])
-popt    = dependency('popt',                                 required: true,
+popt    = dependency('popt',                                  required: true,
                      fallback: ['popt',    'popt_dep'],
                      default_options: ['c_std=gnu99,c99',
                                        'warning_level=0'])
-
 
 
 subdir('src')

@@ -1,9 +1,5 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
+#include "main.h"
 
-#include <popt.h>
 #include <fitsio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -12,13 +8,10 @@
 #include "fip-pipe-cuda.h"
 
 
-#define  HELP_FLAG               1
-#define  START_OFFSET_FLAG       2
-#define  END_OFFSET_FLAG         3
-#define  SNAP_COUNT_GE_3_FLAG    4
-#define  NUM_BASELINES_FLAG      5
-#define  VERBOSE_FLAG            6
-#define  QUIET_FLAG              7
+#define  START_OFFSET_FLAG       4
+#define  END_OFFSET_FLAG         5
+#define  SNAP_COUNT_GE_3_FLAG    6
+#define  NUM_BASELINES_FLAG      7
 
 #define  NUM_BASELINES_FLAG_DEFAULT      -1
 #define  START_OFFSET_FLAG_DEFAULT       -1
