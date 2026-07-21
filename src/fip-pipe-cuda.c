@@ -53,6 +53,7 @@
 enum fip_pipe_cuda_ring{
     RING_VIS_PIN,
     RING_VIS_GPU,
+    RING_XFORM_GPU,
     RING_GRID_GPU,
     RING_IMAGE_GPU,
     RING_RESULT_GPU,
@@ -151,6 +152,7 @@ struct fip_pipe_cuda_state{
         struct{
             cudaEvent_t* vis_pinned;
             cudaEvent_t* vis_gpu;
+            cudaEvent_t* transform_gpu;
             cudaEvent_t* grid_gpu;
             cudaEvent_t* image_gpu;
             cudaEvent_t* result_gpu;
@@ -201,7 +203,7 @@ struct fip_pipe_cuda_state{
      *       - Stride:   >= num_baselines
      *       - Location: GPU memory.
      *       - Content:  Identical to "vis_bin_pinned".
-     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu}, transform_{pinned,gpu}, and grid_gpu.
+     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu} and transform_pinned.
      *
      *   # transform_pinned
      *       - Shape:    (depth=2, 3, 3)
@@ -215,16 +217,22 @@ struct fip_pipe_cuda_state{
      *       - Designed for single cudaMemcpyAsync(H->D) to copy all data to GPU.
      *
      *   # transform_gpu
-     *       - Shape:    (depth=2, 3, 3)
-     *       - Depth:    Double-buffered.
+     *       - Shape:    (depth=8, 3, 3)
+     *       - Depth:    Octuple-buffered.
      *       - Dtype:    float
-     *       - Stride:   >= 3*3, likely 16 or 32 elements (64 or 128 bytes) precisely.
+     *       - Stride:   16 (next NAPOT >= 3*3), 64 bytes precisely.
      *       - Location: GPU memory.
      *       - Content:  Identical to "transform_pinned".
-     *       - For simplicity, keep same depth for vis_bin_{pinned,gpu} and transform_{pinned,gpu}.
+     *       - Because transform_gpu is required for more than just the first stage
+     *         of processing, gridding (it is also required at the interpolation stage),
+     *         transform_gpu must be retained longer than either vis_bin_gpu or
+     *         transform_pinned, and deserves its own ring. Because it is anyways
+     *         fairly small, even a deep 8-entry ring, dedicating 64 bytes per 3x3
+     *         transform matrix, is not particularly onerous (512 bytes).
+     *       - Depth must be at least +2 greater than vis_bin.
      *
      *   # grid_gpu
-     *       - Shape:    (depth=2, grid_size, grid_size)
+     *       - Shape:    (depth=3, grid_size, grid_size)
      *       - Depth:    Double-buffered (2) or Triple-buffered (3).
      *         - Triple-buffered requires more memory but can overlap computation
      *           with both gridding and interpolation if necessary.
@@ -280,11 +288,11 @@ struct fip_pipe_cuda_state{
 
     struct{
         struct{
-            size_t  vis_bin;   // % 2
-            size_t  transform; // % 2
-            size_t  grid;      // % 2 or 3
-            size_t  image;     // % >= 4
-            size_t  result;    // % 2
+            size_t  vis_bin;       // % 2
+            size_t  transform_gpu; // % 8
+            size_t  grid;          // % 2 or 3
+            size_t  image;         // % >= 4
+            size_t  result;        // % 2
         } depth, stride;
 
         void*       vis_bin_pinned;
@@ -434,11 +442,11 @@ static cudaError_t   fip_pipe_cuda_plan_mem                  (fip_pipe_cuda_stat
     cudaError_t cudaError;
     size_t      memfree=0, memtotal=0, memest=0;
 
-    pipe->ring.depth.vis_bin   = 2;
-    pipe->ring.depth.transform = 2;
-    pipe->ring.depth.grid      = 3;
-    pipe->ring.depth.image     = 5;
-    pipe->ring.depth.result    = 2;
+    pipe->ring.depth.vis_bin       = 2;
+    pipe->ring.depth.transform_gpu = 8;
+    pipe->ring.depth.grid          = 3;
+    pipe->ring.depth.image         = 5;
+    pipe->ring.depth.result        = 2;
 
     if((cudaError = cudaMemGetInfo(&memfree, &memtotal))){
         fprintf(stderr, "Cannot query free memory on selected device! %s (%d)\n",
@@ -447,16 +455,16 @@ static cudaError_t   fip_pipe_cuda_plan_mem                  (fip_pipe_cuda_stat
         return cudaError;
     }
 
-    memest = pipe->ring.depth.vis_bin   * pipe->param.num_baselines     * sizeof(cuComplex) +  /* Visibilities */
-             pipe->ring.depth.vis_bin   * pipe->param.num_baselines * 2 * sizeof(float)     +  /* Coordinates */
-             pipe->ring.depth.transform * 3                         * 3 * sizeof(float)     +  /* Transform */
-             pipe->ring.depth.grid      * pipe->param.grid_size     *
-                                          pipe->param.grid_size     *     sizeof(cuComplex) +  /* Grid */
-             pipe->ring.depth.image     * pipe->param.image_size    *
-                                          pipe->param.image_size    *     sizeof(float)     +  /* Image */
-             pipe->ring.depth.result    * pipe->param.unit_num      *
-                                          pipe->param.unit_num      *     sizeof(float)     +  /* Result */
-             pipe->ring.depth.image                                 *     sizeof(float);       /* Max */
+    memest = pipe->ring.depth.vis_bin       * pipe->param.num_baselines     * sizeof(cuComplex) +  /* Visibilities */
+             pipe->ring.depth.vis_bin       * pipe->param.num_baselines * 2 * sizeof(float)     +  /* Coordinates */
+             pipe->ring.depth.transform_gpu * 3                         * 3 * sizeof(float)     +  /* Transform */
+             pipe->ring.depth.grid          * pipe->param.grid_size     *
+                                              pipe->param.grid_size     *     sizeof(cuComplex) +  /* Grid */
+             pipe->ring.depth.image         * pipe->param.image_size    *
+                                              pipe->param.image_size    *     sizeof(float)     +  /* Image */
+             pipe->ring.depth.result        * pipe->param.unit_num      *
+                                              pipe->param.unit_num      *     sizeof(float)     +  /* Result */
+             pipe->ring.depth.image                                     *     sizeof(float);       /* Max */
 
     if(memest > memtotal){
         fprintf(stderr, "GPU %d (%s) too small!\n"
@@ -548,6 +556,8 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
         cudaEventDestroy(pipe->events.ring.vis_pinned[i]);
     for(i=0; i<pipe->ring.depth.vis_bin; i++)
         cudaEventDestroy(pipe->events.ring.vis_gpu[i]);
+    for(i=0; i<pipe->ring.depth.transform_gpu; i++)
+        cudaEventDestroy(pipe->events.ring.transform_gpu[i]);
     for(i=0; i<pipe->ring.depth.grid; i++)
         cudaEventDestroy(pipe->events.ring.grid_gpu[i]);
     for(i=0; i<pipe->ring.depth.image; i++)
@@ -559,6 +569,7 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
 
     free(pipe->events.ring.vis_pinned);
     free(pipe->events.ring.vis_gpu);
+    free(pipe->events.ring.transform_gpu);
     free(pipe->events.ring.grid_gpu);
     free(pipe->events.ring.image_gpu);
     free(pipe->events.ring.result_gpu);
@@ -566,6 +577,7 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
 
     pipe->events.ring.vis_pinned    = NULL;
     pipe->events.ring.vis_gpu       = NULL;
+    pipe->events.ring.transform_gpu = NULL;
     pipe->events.ring.grid_gpu      = NULL;
     pipe->events.ring.image_gpu     = NULL;
     pipe->events.ring.result_gpu    = NULL;
@@ -577,21 +589,24 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
 static cudaError_t   fip_pipe_cuda_create_events             (fip_pipe_cuda_state*     pipe){
     size_t t, i;
 
-    pipe->events.ring.vis_pinned    = calloc(pipe->ring.depth.vis_bin, sizeof(cudaEvent_t));
-    pipe->events.ring.vis_gpu       = calloc(pipe->ring.depth.vis_bin, sizeof(cudaEvent_t));
-    pipe->events.ring.grid_gpu      = calloc(pipe->ring.depth.grid,    sizeof(cudaEvent_t));
-    pipe->events.ring.image_gpu     = calloc(pipe->ring.depth.image,   sizeof(cudaEvent_t));
-    pipe->events.ring.result_gpu    = calloc(pipe->ring.depth.result,  sizeof(cudaEvent_t));
-    pipe->events.ring.result_pinned = calloc(pipe->ring.depth.result,  sizeof(cudaEvent_t));
+    pipe->events.ring.vis_pinned    = calloc(pipe->ring.depth.vis_bin,       sizeof(cudaEvent_t));
+    pipe->events.ring.vis_gpu       = calloc(pipe->ring.depth.vis_bin,       sizeof(cudaEvent_t));
+    pipe->events.ring.transform_gpu = calloc(pipe->ring.depth.transform_gpu, sizeof(cudaEvent_t));
+    pipe->events.ring.grid_gpu      = calloc(pipe->ring.depth.grid,          sizeof(cudaEvent_t));
+    pipe->events.ring.image_gpu     = calloc(pipe->ring.depth.image,         sizeof(cudaEvent_t));
+    pipe->events.ring.result_gpu    = calloc(pipe->ring.depth.result,        sizeof(cudaEvent_t));
+    pipe->events.ring.result_pinned = calloc(pipe->ring.depth.result,        sizeof(cudaEvent_t));
 
-    if(!pipe->events.ring.vis_pinned   ||
-       !pipe->events.ring.vis_gpu      ||
-       !pipe->events.ring.grid_gpu     ||
-       !pipe->events.ring.image_gpu    ||
-       !pipe->events.ring.result_gpu   ||
+    if(!pipe->events.ring.vis_pinned    ||
+       !pipe->events.ring.vis_gpu       ||
+       !pipe->events.ring.transform_gpu ||
+       !pipe->events.ring.grid_gpu      ||
+       !pipe->events.ring.image_gpu     ||
+       !pipe->events.ring.result_gpu    ||
        !pipe->events.ring.result_pinned){
         free(pipe->events.ring.vis_pinned);
         free(pipe->events.ring.vis_gpu);
+        free(pipe->events.ring.transform_gpu);
         free(pipe->events.ring.grid_gpu);
         free(pipe->events.ring.image_gpu);
         free(pipe->events.ring.result_gpu);
@@ -599,6 +614,7 @@ static cudaError_t   fip_pipe_cuda_create_events             (fip_pipe_cuda_stat
 
         pipe->events.ring.vis_pinned    = NULL;
         pipe->events.ring.vis_gpu       = NULL;
+        pipe->events.ring.transform_gpu = NULL;
         pipe->events.ring.grid_gpu      = NULL;
         pipe->events.ring.image_gpu     = NULL;
         pipe->events.ring.result_gpu    = NULL;
@@ -626,6 +642,10 @@ static cudaError_t   fip_pipe_cuda_create_events             (fip_pipe_cuda_stat
     for(i=0; i<pipe->ring.depth.vis_bin; i++){
         cudaEventCreateWithFlags(&pipe->events.ring.vis_gpu[i],       cudaEventDisableTiming);
         cudaEventRecord         ( pipe->events.ring.vis_gpu[i],       0);
+    }
+    for(i=0; i<pipe->ring.depth.transform_gpu; i++){
+        cudaEventCreateWithFlags(&pipe->events.ring.transform_gpu[i], cudaEventDisableTiming);
+        cudaEventRecord         ( pipe->events.ring.transform_gpu[i], 0);
     }
     for(i=0; i<pipe->ring.depth.grid; i++){
         cudaEventCreateWithFlags(&pipe->events.ring.grid_gpu[i],      cudaEventDisableTiming);
@@ -693,6 +713,9 @@ static cudaError_t   fip_pipe_cuda_lock                      (fip_pipe_cuda_stat
         case RING_VIS_GPU:
             iter %= pipe->ring.depth.vis_bin;
             return cudaStreamWaitEvent(stream, pipe->events.ring.vis_gpu[iter],       flags);
+        case RING_XFORM_GPU:
+            iter %= pipe->ring.depth.transform_gpu;
+            return cudaStreamWaitEvent(stream, pipe->events.ring.transform_gpu[iter], flags);
         case RING_GRID_GPU:
             iter %= pipe->ring.depth.grid;
             return cudaStreamWaitEvent(stream, pipe->events.ring.grid_gpu[iter],      flags);
@@ -722,6 +745,9 @@ static cudaError_t   fip_pipe_cuda_unlock                    (fip_pipe_cuda_stat
         case RING_VIS_GPU:
             iter %= pipe->ring.depth.vis_bin;
             return cudaEventRecordWithFlags(pipe->events.ring.vis_gpu[iter],       stream, flags);
+        case RING_XFORM_GPU:
+            iter %= pipe->ring.depth.transform_gpu;
+            return cudaEventRecordWithFlags(pipe->events.ring.transform_gpu[iter], stream, flags);
         case RING_GRID_GPU:
             iter %= pipe->ring.depth.grid;
             return cudaEventRecordWithFlags(pipe->events.ring.grid_gpu[iter],      stream, flags);
@@ -887,28 +913,35 @@ static cudaError_t   fip_pipe_cuda_alloc_mem                 (fip_pipe_cuda_stat
                     &pipe->ring.stride.vis_bin,
                     num_baselines * sizeof(float),
                     pipe->ring.depth.vis_bin * (2+2));
-    cudaMallocPitch(&pipe->ring.transform_gpu,
-                    &pipe->ring.stride.transform,
-                    3 * 3         * sizeof(float),
-                    pipe->ring.depth.transform);
     cudaMallocPitch(&pipe->ring.grid_gpu,
                     &pipe->ring.stride.grid,
                     grid_size     * sizeof(cuComplex),
-                    pipe->ring.depth.grid  * grid_size);
+                    pipe->ring.depth.grid    * grid_size);
     cudaMallocPitch(&pipe->ring.image_gpu,
                     &pipe->ring.stride.image,
                     image_size    * sizeof(float),
-                    pipe->ring.depth.image * image_size);
+                    pipe->ring.depth.image   * image_size);
     cudaMallocPitch(&pipe->ring.result_gpu,
                     &pipe->ring.stride.result,
                     unit_num      * sizeof(float),
-                    pipe->ring.depth.result * unit_num);
+                    pipe->ring.depth.result  * unit_num);
 
-    pipe->ring.stride.vis_bin    /= sizeof(float);
-    pipe->ring.stride.transform  /= sizeof(float);
-    pipe->ring.stride.grid       /= sizeof(cuComplex);
-    pipe->ring.stride.image      /= sizeof(float);
-    pipe->ring.stride.result     /= sizeof(float);
+    pipe->ring.stride.vis_bin        /= sizeof(float);
+    pipe->ring.stride.grid           /= sizeof(cuComplex);
+    pipe->ring.stride.image          /= sizeof(float);
+    pipe->ring.stride.result         /= sizeof(float);
+
+    /**
+     * We do things a bit differently for transform_gpu, given that it is
+     * a fairly small, 3x3 matrix. We decide on the stride first (for
+     * efficiency, round this up to the next natural power of 2 (16), and
+     * allocate the requisite multiple of that memory using cudaMalloc().
+     */
+
+    pipe->ring.stride.transform_gpu = 16;
+    cudaMalloc     (&pipe->ring.transform_gpu,
+                     pipe->ring.depth.transform_gpu  *
+                     pipe->ring.stride.transform_gpu * sizeof(float));
 
     cudaMalloc     (&pipe->wrkspc.npp.ptr,              pipe->wrkspc.npp.sz);
     cudaMalloc     (&pipe->wrkspc.cufft.ptr,            pipe->wrkspc.cufft.sz);
@@ -916,7 +949,7 @@ static cudaError_t   fip_pipe_cuda_alloc_mem                 (fip_pipe_cuda_stat
     cudaMalloc     (&pipe->ring.max_gpu,                pipe->ring.depth.image                           * sizeof(float));
 
     cudaMallocHost (&pipe->ring.vis_bin_pinned,         pipe->ring.depth.vis_bin * num_baselines * (2+2) * sizeof(float));
-    cudaMallocHost (&pipe->ring.transform_pinned,       pipe->ring.depth.transform *       3 *         3 * sizeof(float));
+    cudaMallocHost (&pipe->ring.transform_pinned,       pipe->ring.depth.vis_bin *        3  *         3 * sizeof(float));
     cudaMallocHost (&pipe->ring.result_pinned,          pipe->ring.depth.result  * unit_num  *  unit_num * sizeof(float));
 
     if((cudaError = cudaGetLastError())){
@@ -951,14 +984,14 @@ static float*        fip_pipe_cuda_calc_ring_coords_gpu      (fip_pipe_cuda_stat
 }
 
 static float       (*fip_pipe_cuda_calc_ring_transform_pinned(fip_pipe_cuda_state*     pipe, size_t i))[3]{
-    i %= pipe->ring.depth.transform;
+    i %= pipe->ring.depth.vis_bin;
     return (float(*)[3])((float*)pipe->ring.transform_pinned + 3*3*i);
 }
 
 static float       (*fip_pipe_cuda_calc_ring_transform_gpu   (fip_pipe_cuda_state*     pipe, size_t i))[3]{
-    i %= pipe->ring.depth.transform;
+    i %= pipe->ring.depth.transform_gpu;
     return (float(*)[3])((float*)pipe->ring.transform_gpu +
-                                 pipe->ring.stride.transform * i);
+                                 pipe->ring.stride.transform_gpu * i);
 }
 
 static const float (*fip_pipe_cuda_calc_ring_transform_gpu_c (fip_pipe_cuda_state*     pipe, size_t i))[3]{
@@ -1166,6 +1199,7 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
         /* Stream copy_gpu */
         fip_pipe_cuda_await     (pipe, i, ITER_DATA_READ,  pipe->stream.copy_gpu, 0);
         fip_pipe_cuda_lock      (pipe, i, RING_VIS_GPU,    pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_XFORM_GPU,  pipe->stream.copy_gpu, 0);
         cudaMemcpyAsync         (fip_pipe_cuda_calc_ring_transform_gpu   (pipe, i),
                                  fip_pipe_cuda_calc_ring_transform_pinned(pipe, i),
                                  3            *            3 * sizeof(float),
@@ -1237,6 +1271,7 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->wrkspc.conv_corr_kernel,
                                  conv_corr_norm_factor,
                                  inv_num_baselines);
+        fip_pipe_cuda_unlock    (pipe, i, RING_XFORM_GPU,  pipe->stream.interpolation, 0);
         fip_pipe_cuda_unlock    (pipe, i, RING_GRID_GPU,   pipe->stream.interpolation, 0);
         nppiMax_32f_C1R_Ctx     (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i),
                                  pipe->ring.stride.image * sizeof(float),
