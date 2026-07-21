@@ -11,6 +11,21 @@
 #include "fip-pipe-cuda.h"
 
 
+/* Defines */
+
+/**
+ * cudaEventRecordWithFlags() was only introduced in CUDA 11.2+.
+ * Silently fall back to cudaEventRecord() in its absence.
+ * Also silence the "unused" warning about flags in that case.
+ */
+
+#if CUDART_VERSION < 11020
+#define cudaEventRecordWithFlags(event, stream, flags)  \
+        ((void)(flags), cudaEventRecord((event), (stream)))
+#endif
+
+
+
 /* Enums */
 enum fip_pipe_cuda_ring{
     RING_VIS_PIN,
@@ -704,12 +719,27 @@ static cudaError_t   fip_pipe_cuda_unlock                    (fip_pipe_cuda_stat
 static cudaError_t   fip_pipe_cuda_plan_npp                  (fip_pipe_cuda_state*     pipe,
                                                               NppiSize*                npp_image_size,
                                                               NppStreamContext*        npp_ctx){
+    /**
+     * NPP 12.4+ changed the data type for workspace sizes from int to size_t.
+     *
+     * Use a temporary variable of the appropriate type to receive the result,
+     * then promote to size_t.
+     */
+
+#if (NPP_VERSION_MAJOR  > 12) || \
+    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR >= 4)
+    size_t maxsz = 0;
+#else
+    int    maxsz = 0;
+#endif
+
     npp_image_size->height = (int)pipe->param.image_size;
     npp_image_size->width  = (int)pipe->param.image_size;
     nppGetStreamContext(npp_ctx);
     npp_ctx->hStream       = pipe->stream.gridding;
     cudaStreamGetFlags(npp_ctx->hStream, &npp_ctx->nStreamFlags);
-    nppiMaxGetBufferHostSize_32f_C1R_Ctx(*npp_image_size, &pipe->wrkspc.npp.sz, *npp_ctx);
+    nppiMaxGetBufferHostSize_32f_C1R_Ctx(*npp_image_size, &maxsz, *npp_ctx);
+    pipe->wrkspc.npp.sz = (size_t)maxsz;
     return cudaSuccess;
 }
 
