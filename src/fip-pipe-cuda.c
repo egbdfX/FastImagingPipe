@@ -1,7 +1,30 @@
 /* Includes */
 #include <stdio.h>
 
+
+/**
+ * CUDA defines enumerator values beyond the range of int, which is invalid
+ * under ISO C older than C23.
+ *
+ * Because these headers cannot be changed, reduce the noise by silencing the
+ * warning when feasible under GCC 4.6+, or Clang 3+. This can be done by
+ * creating a temporary context where the -Wpedantic diagnostic is ignored,
+ * #include'ing cuda.h, then destroying this context.
+ */
+
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || \
+    __clang_major__ >= 3
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 #include <cuda.h>
+
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6) || \
+    __clang_major__ >= 3
+#pragma GCC diagnostic pop
+#endif
+
 #include <cuda_runtime.h>
 #include <device_types.h>
 #include <cufft.h>

@@ -1,5 +1,6 @@
 #include "main.h"
 
+#include <stdint.h>
 #include <fitsio.h>
 #include <fcntl.h>
 #include <unistd.h>
