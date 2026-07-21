@@ -539,7 +539,7 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
 
     for(t=0; t<sizeof(pipe->events.iter) /
                sizeof(pipe->events.iter[0]); t++){
-        for(i=ITER_START; i<ITER_END; i++){
+        for(i=ITER_START; i<ITER_NUM_EVENTS; i++){
             cudaEventDestroy(pipe->events.iter[t][i]);
         }
     }
@@ -614,7 +614,7 @@ static cudaError_t   fip_pipe_cuda_create_events             (fip_pipe_cuda_stat
 
     for(t=0; t<sizeof(pipe->events.iter) /
                sizeof(pipe->events.iter[0]); t++){
-        for(i=ITER_START; i<ITER_END; i++){
+        for(i=ITER_START; i<ITER_NUM_EVENTS; i++){
             cudaEventCreate(&pipe->events.iter[t][i]);
         }
     }
