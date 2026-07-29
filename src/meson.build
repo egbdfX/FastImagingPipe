@@ -19,6 +19,7 @@ libfip_version_script_link_args = not has_version_script ? [] : [
 
 libfip = shared_library('fip',
     files(
+        'cpu_kernels.c',
         'cuda_kernels.cu',
         'cuda_pipeline.c',
     ) + visibility_h,
