@@ -5,9 +5,9 @@
 #
 
 fip_tools_src = files(
-    'main-help.c',
-    'main-image.c',
-    'main-pipe.c',
+    'main_help.c',
+    'main_image.c',
+    'main_pipe.c',
 )
 
 
@@ -22,13 +22,14 @@ verbnamedf   = f''
 verbfuncdc   = f''
 verbtabldf   = f''
 foreach f : fip_tools_src
-    if fs.stem(f).startswith('main-')
-        v           = fs.stem(f).substring(5)
-        fip_verbs  += [v]
-        verbnamedc += f'extern char main_@v@_name[];\n'
-        verbnamedf += f'char        main_@v@_name[] = "fip @v@";\n'
-        verbfuncdc += f'extern int  main_@v@(int argc, char* argv[]);\n'
-        verbtabldf += f'    {main_@v@_name, main_@v@},\n'
+    if fs.stem(f).startswith('main_')
+        v           = fs.stem(f)
+        verb        = v.substring(5)
+        fip_verbs  += [verb]
+        verbnamedc += f'extern char @v@_name[];\n'
+        verbnamedf += f'char        @v@_name[] = "fip @verb@";\n'
+        verbfuncdc += f'extern int  @v@(int argc, char* argv[]);\n'
+        verbtabldf += f'    {@v@_name, @v@},\n'
     endif
 endforeach
 
@@ -104,6 +105,8 @@ fip_tools_src += [
                    command: [py, '-c', 'import sys;print(sys.argv[1])', main_c]),
 ]
 
+unset_variable('v')
+unset_variable('verb')
 unset_variable('main_h')
 unset_variable('main_c')
 unset_variable('verbtabldc')
