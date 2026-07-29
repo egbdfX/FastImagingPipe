@@ -1,12 +1,13 @@
 /* Include Guard */
-#ifndef SRC_FIP_PIPE_CUDA_H
-#define SRC_FIP_PIPE_CUDA_H
+#ifndef INCLUDE_FIP_CUDA_PIPELINE_H
+#define INCLUDE_FIP_CUDA_PIPELINE_H
 
 
 
 /* Includes */
 #include <stdlib.h>
 #include <string.h>
+#include "fip/visibility.h"
 
 
 
@@ -43,6 +44,7 @@ typedef void (*fip_pipe_cuda_output_cb)(void*  userdata0,
 
 
 /* Function Prototypes */
+LIBFIP_PUBLIC
 int  fip_pipe_cuda_alloc(fip_pipe_cuda_state**    pipe_ptr,
                          const int                verbose,
                          const int                gpu_ordinal,
@@ -52,6 +54,7 @@ int  fip_pipe_cuda_alloc(fip_pipe_cuda_state**    pipe_ptr,
                          const size_t             unit_size,
                          const size_t             unit_num);
 
+LIBFIP_PUBLIC
 int  fip_pipe_cuda      (fip_pipe_cuda_state*     pipe,
                          fip_pipe_cuda_input_cb   callback_input,
                          fip_pipe_cuda_output_cb  callback_output,
@@ -60,8 +63,10 @@ int  fip_pipe_cuda      (fip_pipe_cuda_state*     pipe,
                          const size_t             snap_start,
                          const size_t             snap_end);
 
+LIBFIP_PUBLIC
 void fip_pipe_cuda_free (fip_pipe_cuda_state*     pipe);
 
+LIBFIP_PUBLIC
 void fip_pipe_cuda_clear(fip_pipe_cuda_state**    pipe_ptr);
 
 

@@ -30,8 +30,8 @@
 #include <cufft.h>
 #include <npp.h>
 
-#include "fip-cuda-kernels.h"
-#include "fip-pipe-cuda.h"
+#include "fip/cuda_kernels.h"
+#include "fip/cuda_pipeline.h"
 
 
 /* Defines */

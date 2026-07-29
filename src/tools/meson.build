@@ -111,3 +111,8 @@ unset_variable('verbnamedc')
 unset_variable('verbnamedf')
 unset_variable('verbfuncdc')
 unset_variable('verbtabldf')
+
+
+fip_tools_src += files(
+    'fits_utils.c',
+)

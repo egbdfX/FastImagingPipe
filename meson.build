@@ -19,14 +19,24 @@ add_project_arguments     ('-Wno-deprecated-gpu-targets',   language: 'cuda')
 add_project_link_arguments('-Wno-deprecated-gpu-targets',   language: 'cuda')
 
 
+
 fs            = import('fs')
 py_mod        = import('python')
-py            = py_mod.find_installation()
+snippets      = import('snippets')
 cuda_mod      = import('unstable-cuda')
-nvcc_version  = meson.get_compiler('cuda').version()
+
+
+
+py            = py_mod.find_installation()
+c             = meson.get_compiler('c')
+cpp           = meson.get_compiler('cpp')
+nvcc          = meson.get_compiler('cuda')
+ld            = cpp.get_linker_id()
+nvcc_version  = nvcc.version()
 cuda_target   = get_option('gpu_arch')
 cuda_flags    = cuda_mod.nvcc_arch_flags   (nvcc_version, cuda_target)
 cuda_readable = cuda_mod.nvcc_arch_readable(nvcc_version, cuda_target)
+
 message('Building with NVCC '+nvcc_version)
 message('Building for architectures ' + ' '.join(cuda_readable))
 
@@ -47,4 +57,6 @@ popt    = dependency('popt',                                  required: true,
                                        'warning_level=0'])
 
 
+
+subdir('include')
 subdir('src')

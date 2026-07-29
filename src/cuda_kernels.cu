@@ -2,7 +2,7 @@
 #include <device_launch_parameters.h>
 #include <math_constants.h>
 
-#include "fip-cuda-kernels.h"
+#include "fip/cuda_kernels.h"
 
 
 /**

@@ -1,11 +1,12 @@
 /* Include Guard */
-#ifndef SRC_FIP_CUDA_KERNELS_H
-#define SRC_FIP_CUDA_KERNELS_H
+#ifndef INCLUDE_FIP_CUDA_KERNELS_H
+#define INCLUDE_FIP_CUDA_KERNELS_H
 
 
 /* Includes */
 #include <stdlib.h>
 #include <cuda_runtime.h>
+#include "fip/visibility.h"
 
 
 /* Extern "C" Guard */
@@ -14,6 +15,7 @@ extern "C" {
 #endif
 
 
+LIBFIP_PUBLIC
 void fip_cuda_kernel_convkernel    (dim3                cuda_grid,
                                     dim3                cuda_thrd,
                                     size_t              cuda_shmem,
@@ -23,6 +25,7 @@ void fip_cuda_kernel_convkernel    (dim3                cuda_grid,
                                     size_t              grid_size,
                                     float               conv_corr_norm_factor);
 
+LIBFIP_PUBLIC
 void fip_cuda_kernel_gridding      (dim3                cuda_grid,
                                     dim3                cuda_thrd,
                                     size_t              cuda_shmem,
@@ -36,6 +39,7 @@ void fip_cuda_kernel_gridding      (dim3                cuda_grid,
                                     const size_t        num_baselines,
                                     const float         r1r2_scale);
 
+LIBFIP_PUBLIC
 void fip_cuda_kernel_interp          (dim3                cuda_grid,
                                     dim3                cuda_thrd,
                                     size_t              cuda_shmem,
@@ -52,6 +56,7 @@ void fip_cuda_kernel_interp          (dim3                cuda_grid,
                                     const float         conv_corr_norm_factor,
                                     const float         inv_num_baselines);
 
+LIBFIP_PUBLIC
 void fip_cuda_kernel_tlisi         (dim3                cuda_grid,
                                     dim3                cuda_thrd,
                                     size_t              cuda_shmem,

@@ -5,8 +5,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "fits-utils.h"
-#include "fip-pipe-cuda.h"
+#include "fip/cuda_pipeline.h"
+#include "fits_utils.h"
 
 
 #define  START_OFFSET_FLAG       4
