@@ -769,14 +769,17 @@ static cudaError_t   fip_pipe_cuda_plan_npp                  (fip_pipe_cuda_stat
                                                               NppiSize*                npp_image_size,
                                                               NppStreamContext*        npp_ctx){
     /**
-     * NPP 12.4+ changed the data type for workspace sizes from int to size_t.
+     * CUDA 12.4+ (NPP 12.2.5.2+) changed the data type for workspace sizes
+     * from int to size_t.
      *
      * Use a temporary variable of the appropriate type to receive the result,
      * then promote to size_t.
      */
 
 #if (NPP_VERSION_MAJOR  > 12) || \
-    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR >= 4)
+    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR  > 2) || \
+    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR == 2  && NPP_VERSION_PATCH >= 5) || \
+    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR == 2  && NPP_VERSION_PATCH == 5  && NPP_VERSION_BUILD >= 2)
     size_t maxsz = 0;
 #else
     int    maxsz = 0;
