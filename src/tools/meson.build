@@ -7,6 +7,7 @@
 fip_tools_src = files(
     'main_help.c',
     'main_image.c',
+    'main_info.cpp',
     'main_oldinfo.cpp',
     'main_pipe.c',
 )
