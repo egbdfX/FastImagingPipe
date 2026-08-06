@@ -1,6 +1,7 @@
 #include "main.h"
 
 #include <stdint.h>
+#include <string.h>
 #include <fitsio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -35,6 +36,21 @@ typedef struct{
         fitsfile* result;
     } output;
 } fip_pipe_iter_state;
+
+static char* fip_strdup(const char* s){
+    char*  t;
+    size_t l;
+
+    if(!s)
+        return NULL;
+
+    l = strlen(s);
+    t = (char*)malloc(l+1);
+    if(!t)
+        return NULL;
+
+    return (char*)memcpy(t, s, l+1);
+}
 
 static ssize_t pread_reliable(int fd, void* buf, size_t count, off_t offset){
     ssize_t breadt;
@@ -131,9 +147,10 @@ int main_pipe(int argc, char* argv[]){
     int       fits_status     = 0;
 
     fitsfile* input           = NULL;
-    char*     input_name      = (char*)"input.fits";
+    char*     input_name      = NULL;
     fitsfile* output          = NULL;
-    char*     output_name     = (char*)"output.fits";
+    char*     output_name     = NULL;
+    const char** leftovers    = NULL;
 
     fip_pipe_cuda_state* pipe = NULL;
     fip_pipe_iter_state state = {{0, -1, 0, 0, 0}, {0, NULL}};
@@ -252,10 +269,36 @@ int main_pipe(int argc, char* argv[]){
                 break;
         }
     }while(rc > 0);
+    input_name  = fip_strdup(input_name);
+    output_name = fip_strdup(output_name);
+
+    /**
+     * Interpret first two leftover arguments as input and output file names,
+     * if either of these remain unset.
+     * 
+     * If still not set, choose defaults "input.fits" and "output.fits".
+     */
+
+    leftovers = poptGetArgs(parser);
+    if(leftovers){
+        if(leftovers[0]){
+            if(!input_name){
+                input_name = fip_strdup(leftovers[0]);
+                if(leftovers[1] && !output_name)
+                    output_name = fip_strdup(leftovers[1]);
+            }else if(!output_name)
+                output_name = fip_strdup(leftovers[0]);
+        }
+    }
+    if(!input_name)
+        input_name  = fip_strdup("input.fits");
+    if(!output_name)
+        output_name = fip_strdup("output.fits");
+
     poptfail:
     poptFreeContext(parser);
     if(rc != EXIT_SUCCESS)
-        return rc;
+        goto finalexit;
     rc = EXIT_FAILURE;
 
 
@@ -498,5 +541,9 @@ int main_pipe(int argc, char* argv[]){
         fits_close_file(input,  &fits_status), input  = NULL;
     if(output)
         fits_close_file(output, &fits_status), output = NULL;
+
+    finalexit:
+    free(input_name);
+    free(output_name);
     return rc;
 }
