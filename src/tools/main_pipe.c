@@ -55,7 +55,7 @@ static char* fip_strdup(const char* s){
 static ssize_t pread_reliable(int fd, void* buf, size_t count, off_t offset){
     ssize_t breadt;
     ssize_t bread = 0;
-    char*   bufc  = buf;
+    char*   bufc  = (char*)buf;
 
     while(bread < (ssize_t)count){
         breadt = pread(fd, bufc+bread, count-(size_t)bread, offset+bread);
@@ -130,8 +130,8 @@ static void output_cb(void*  userdata0,
      * three snapshots are required to calculate a result image.
      */
 
-    long fres[3] = {1, 1,               iter+1-2};
-    long lres[3] = {unit_num, unit_num, iter+1-2};
+    long fres[3] = {1, 1,                           (long)iter+1-2};
+    long lres[3] = {(long)unit_num, (long)unit_num, (long)iter+1-2};
 
     fits_write_subset(state->output.result, TFLOAT, fres, lres, result, &state->output.status);
 
@@ -170,6 +170,8 @@ int main_pipe(int argc, char* argv[]){
     long long snap_count_final   = 0;
     int       verbose         = 0;
     int       gpu_ordinal     = 0;
+    size_t    unit_num;
+    size_t    snap_count_file_out;
 
 
     /**
@@ -479,8 +481,8 @@ int main_pipe(int argc, char* argv[]){
      * Assume that we want to rewrite the file in that case.
      */
 
-    const size_t unit_num            = image_size/unit_size;
-    const size_t snap_count_file_out = snap_count_file-2;
+    unit_num            = image_size/unit_size;
+    snap_count_file_out = snap_count_file-2;
     switch(fip_output_open_diskfile(&output, output_name, READWRITE,
                                     snap_count_file_out, unit_num,
                                     &fits_status)){
