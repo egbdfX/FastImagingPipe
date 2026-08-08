@@ -788,7 +788,7 @@ static cudaError_t   fip_pipe_cuda_plan_npp                  (fip_pipe_cuda_stat
     npp_image_size->height = (int)pipe->param.image_size;
     npp_image_size->width  = (int)pipe->param.image_size;
     nppGetStreamContext(npp_ctx);
-    npp_ctx->hStream       = pipe->stream.gridding;
+    npp_ctx->hStream       = pipe->stream.interpolation;
     cudaStreamGetFlags(npp_ctx->hStream, &npp_ctx->nStreamFlags);
     nppiMaxGetBufferHostSize_32f_C1R_Ctx(*npp_image_size, &maxsz, *npp_ctx);
     pipe->wrkspc.npp.sz = (size_t)maxsz;
