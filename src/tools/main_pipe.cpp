@@ -5,6 +5,18 @@
 #include <fitsio.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <assert.h>
+
+#include <casacore/casa/Arrays/Array.h>
+#include <casacore/casa/Arrays/ArrayAccessor.h>
+#include <casacore/casa/Arrays/IPosition.h>
+#include <casacore/casa/Quanta/MVTime.h>
+#include <casacore/casa/Quanta/Unit.h>
+#include <casacore/tables/Tables/ArrayColumn.h>
+#include <casacore/tables/Tables/Table.h>
+#include <casacore/tables/Tables/TableIter.h>
+#include <casacore/tables/Tables/TableRecord.h>
+#include <casacore/tables/TaQL.h>
 
 #include "fip/cuda_pipeline.h"
 #include "fits_utils.h"
@@ -20,22 +32,268 @@
 #define  END_OFFSET_FLAG_DEFAULT          0
 #define  SNAP_COUNT_FLAG_DEFAULT         -1
 
+#define  K_SPEED_OF_LIGHT         299792458.0f
+
+
+/* We heavily use CASACore objects, so import the namespace. */
+using namespace casacore;
 
 
 /* fip pipe implementation. */
-typedef struct{
-    struct{
-        int       status;
-        int       fd;
-        long long transform_off;
-        long long visibilities_off;
-        long long coords_off;
-    } input;
-    struct{
-        int       status;
-        fitsfile* result;
-    } output;
-} fip_pipe_iter_state;
+struct fip_pipe_iter_state{
+    fip_pipe_iter_state(Table input=Table(), fitsfile* output=NULL) :
+                        input(input),
+                        input_iteration(0),
+                        array_center(0),
+                        output(output),
+                        output_status(0){
+        if(!input.isNull())
+            reset_iterator();
+    }
+
+    fip_pipe_iter_state& reset_iterator(void){
+        iter = TableIterator(input, "TIME", TableIterator::Ascending,
+                                            TableIterator::QuickSort);
+        input_iteration = 0;
+        chan_freq       = ROArrayColumn<Double>(input.keywordSet()
+                                                     .asTable("SPECTRAL_WINDOW"),
+                                                "CHAN_FREQ").getColumn();
+
+        Table observation = input.keywordSet().asTable("OBSERVATION");
+        if(observation.nrow() > 0 &&
+           observation.tableDesc().isColumn("ARRAY_CENTER")){
+            ROArrayColumn<Double> array_center_col(observation, "ARRAY_CENTER");
+            Vector<Double> array_center_vec = array_center_col.get(0);
+            if(array_center_vec.size() > 0){
+                array_center = array_center_vec[0];
+            }
+        }
+        return *this;
+    }
+
+    fip_pipe_iter_state& skip(size_t num){
+        for(size_t i=0;i<num;i++){
+            input_iteration++;
+            iter.next();
+        }
+        return *this;
+    }
+
+    void next(void*    userdata,
+              Complex* visibilities,
+              Float*   coordinates,
+              Float    transform[3][3],
+              size_t   num_baselines,
+              size_t   iteration){
+        (void)userdata;
+        (void)iteration;
+
+
+        /**
+         * Get current snapshot. Obtain vital information about it.
+         */
+
+        Table  snapshot = iter.table(); iter.next();
+        size_t num_rows = (size_t)snapshot.nrow();
+        const bool has_weight_spectrum = snapshot.tableDesc().isColumn("WEIGHT_SPECTRUM");
+
+
+        /**
+         * Open snapshot's columns with accessors.
+         *
+         * Also, get vital shape information from the first row of "DATA".
+         * MeasurementSet 2.0 specifies [1] that the shape of every row of "DATA" is
+         *
+         *     (DATA): Complex(Nc, Nf)
+         *
+         * where:
+         *
+         *     Nc = Number of correlators
+         *     Nf = Number of frequency channels
+         *
+         * Here we take num_pols=Nc, and num_channels=Nf.
+         *
+         * [1] https://casacore.github.io/casacore-notes/229.html#x1-630005.1
+         */
+
+        ROArrayColumn<Double>  uvw_col (snapshot, "UVW"); /* Raw Coordinates */
+        ROArrayColumn<Complex> data_col(snapshot, "DATA");/* Raw Visibilities */
+        ROArrayColumn<Bool>    flag_col(snapshot, "FLAG");/* Flag vector */
+        ROArrayColumn<Float>   weight_col;                /* Optional weights */
+        if(has_weight_spectrum)
+            weight_col = ROArrayColumn<Float>(snapshot, "WEIGHT_SPECTRUM");
+        size_t num_pols       = data_col.shape(0)[0];
+        size_t num_channels   = data_col.shape(0)[1];
+        bool   merge_two_pols = num_pols > 1;
+        if(num_baselines < num_rows*num_channels)
+            throw std::runtime_error("DATA has more baselines than expected!");
+        if(num_pols != 1 && num_pols != 2 && num_pols != 4)
+            throw std::runtime_error("DATA has unexpected number of "
+                                     "polarizations, neither 1 nor 2 nor 4!");
+
+
+        /**
+         * To optimize data-loading, use a Slicer object designed to select the
+         * one or two polarizations only we want: Either {0}, {0,1} or {0,3}.
+         *
+         * We use this slicer in the identically-shaped arrays "DATA" and "FLAG".
+         */
+
+        Slice  pol_slice = !merge_two_pols ? Slice(0) : Slice(0, 2, num_pols-1);
+        Slicer pol_slicer{pol_slice, Slice()};
+        Array<Double>  uvw  = uvw_col   .getColumn();
+        Array<Complex> data = data_col  .getColumn(pol_slicer);
+        Array<Bool>    flag = flag_col  .getColumn(pol_slicer);
+        Array<Float>   weight;
+        if(has_weight_spectrum){
+            weight          = weight_col.getColumn(pol_slicer);
+        }
+
+
+        /**
+         * We now have the data. Process it. Our loops assume contiguous storage.
+         *
+         * Fill the visibilities array under control of the flags and weights.
+         * Then, compute the coordinates.
+         */
+
+        if(!uvw   .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( uvw   .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!data  .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( data  .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!flag  .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( flag  .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!weight.contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( weight.steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+
+        Double*  ptr_uvw    = uvw .data();
+        Complex* ptr_data   = data.data();
+        Bool*    ptr_flag   = flag.data();
+        Float*   ptr_weight = weight.empty() ? NULL : weight.data();
+        Double*  ptr_freq   = chan_freq.data();
+
+
+        /* Visibilities */
+        for(size_t i=0;i<num_rows;i++){
+            for(size_t j=0;j<num_channels;j++){
+                Complex vis0    = *ptr_data++;
+                Complex vis3    = merge_two_pols ? *ptr_data++ : 0;
+                Bool    flag0   = *ptr_flag++;
+                Bool    flag3   = merge_two_pols ? *ptr_flag++ : 1;
+                Float   weight0 = has_weight_spectrum                   ? *ptr_weight++ : 1.0f;
+                Float   weight3 = merge_two_pols ? (has_weight_spectrum ? *ptr_weight++ : 1.0f) : 0.0f;
+
+                Float   w0      = flag0 ? 0.0f : weight0;
+                Float   w3      = flag3 ? 0.0f : weight3;
+                Float   w_sum   = weight0+weight3;
+                if(w_sum > 0.0f){
+                    *visibilities++ = (vis0*w0 + vis3*w3)/w_sum;
+                }else{
+                    *visibilities++ = 0;
+                }
+            }
+        }
+
+
+        /* Coordinates, Part I: Mean. */
+        Double x0avg=0, x1avg=0, x2avg=0, x0, x1, x2, u, v, w;
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+
+                x0avg += x0;
+                x1avg += x1;
+                x2avg += x2;
+            }
+        }
+        x0avg /= num_baselines;
+        x1avg /= num_baselines;
+        x2avg /= num_baselines;
+
+
+        /* Coordinates, Part II: Covariance. */
+        Double covariance[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
+
+                covariance[0][0] += x0*x0;
+                covariance[0][1] += x0*x1;
+                covariance[0][2] += x0*x2;
+                covariance[1][1] += x1*x1;
+                covariance[1][2] += x1*x2;
+                covariance[2][2] += x2*x2;
+            }
+        }
+        covariance[0][0] /= num_baselines;
+        covariance[0][1] /= num_baselines;
+        covariance[0][2] /= num_baselines;
+        covariance[1][1] /= num_baselines;
+        covariance[1][2] /= num_baselines;
+        covariance[2][2] /= num_baselines;
+        covariance[1][0]  = covariance[0][1];
+        covariance[2][0]  = covariance[0][2];
+        covariance[2][1]  = covariance[1][2];
+
+
+        /* Coordinates, Part III: SVD. */
+        Double eigenvalues    [3] =  {0,0,0};
+        Double eigenvectors[3][3] = {{1,0,0}, {0,1,0}, {0,0,1}};
+        /* FILL ME! */
+        for(size_t i=0;i<3;i++)
+            for(size_t j=0;j<3;j++)
+                transform[i][j] = eigenvectors[i][j];
+
+
+        /* Coordinates, Part IV: Project. */
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
+
+                coordinates[2*(num_channels*i+j) + 0] = eigenvectors[0][0]*x0 +
+                                                        eigenvectors[0][1]*x1 +
+                                                        eigenvectors[0][2]*x2;
+                coordinates[2*(num_channels*i+j) + 1] = eigenvectors[1][0]*x0 +
+                                                        eigenvectors[1][1]*x1 +
+                                                        eigenvectors[1][2]*x2;
+            }
+        }
+    }
+
+    Table         input;
+    size_t        input_iteration;
+    TableIterator iter;
+    Array<Double> chan_freq;
+    double        array_center;
+    fitsfile*     output;
+    int           output_status;
+};
 
 static char* fip_strdup(const char* s){
     char*  t;
@@ -52,65 +310,19 @@ static char* fip_strdup(const char* s){
     return (char*)memcpy(t, s, l+1);
 }
 
-static ssize_t pread_reliable(int fd, void* buf, size_t count, off_t offset){
-    ssize_t breadt;
-    ssize_t bread = 0;
-    char*   bufc  = (char*)buf;
-
-    while(bread < (ssize_t)count){
-        breadt = pread(fd, bufc+bread, count-(size_t)bread, offset+bread);
-        if(breadt <= 0){
-            return bread>0 ? bread : breadt;
-        }else{
-            bread += breadt;
-        }
-    }
-
-    return bread;
-}
-
 static void input_cb (void*  userdata0,
                       void*  userdata1,
                       void*  visibilities,
-                      float* coords,
+                      float* coordinates,
                       float  transform[3][3],
                       size_t num_baselines,
-                      size_t iter){
-    uint32_t             x;
-    size_t               i;
-    size_t               transform_count    = 3 * 3;
-    size_t               visibilities_count = 2 * num_baselines;
-    size_t               coords_count       = 2 * num_baselines;
-    size_t               transform_bytes    = transform_count    * sizeof(float);
-    size_t               visibilities_bytes = visibilities_count * sizeof(float);
-    size_t               coords_bytes       = coords_count       * sizeof(float);
-    fip_pipe_iter_state* state              = (fip_pipe_iter_state*)userdata0;
-    (void)userdata1;
-
-    pread_reliable(state->input.fd, transform,     transform_bytes,
-                   state->input.transform_off    + transform_bytes    * iter);
-    pread_reliable(state->input.fd, visibilities,  visibilities_bytes,
-                   state->input.visibilities_off + visibilities_bytes * iter);
-    pread_reliable(state->input.fd, coords,        coords_bytes,
-                   state->input.coords_off       + coords_bytes       * iter);
-
-    for(i=0; i<transform_count; i++){
-        memcpy(&x, &((float*)transform)[i],    sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&((float*)transform)[i], &x,    sizeof(uint32_t));
-    }
-    for(i=0; i<visibilities_count; i++){
-        memcpy(&x, &((float*)visibilities)[i], sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&((float*)visibilities)[i], &x, sizeof(uint32_t));
-    }
-    for(i=0; i<coords_count; i++){
-        memcpy(&x, &coords[i],                 sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&coords[i], &x,                 sizeof(uint32_t));
-    }
-
-    if(state->input.status){
-        fits_report_error(stderr, state->input.status);
-        fflush(stderr);
-    }
+                      size_t iteration){
+    ((fip_pipe_iter_state*)userdata0)->next(userdata1,
+                                            (Complex*)visibilities,
+                                            coordinates,
+                                            transform,
+                                            num_baselines,
+                                            iteration);
 }
 
 static void output_cb(void*  userdata0,
@@ -133,10 +345,10 @@ static void output_cb(void*  userdata0,
     long fres[3] = {1, 1,                           (long)iter+1-2};
     long lres[3] = {(long)unit_num, (long)unit_num, (long)iter+1-2};
 
-    fits_write_subset(state->output.result, TFLOAT, fres, lres, result, &state->output.status);
+    fits_write_subset(state->output, TFLOAT, fres, lres, result, &state->output_status);
 
-    if(state->output.status){
-        fits_report_error(stderr, state->output.status);
+    if(state->output_status){
+        fits_report_error(stderr, state->output_status);
         fflush(stderr);
     }
 }
@@ -146,14 +358,13 @@ int main_pipe(int argc, char* argv[]){
     int       rc              = EXIT_FAILURE;
     int       fits_status     = 0;
 
-    fitsfile* input           = NULL;
     char*     input_name      = NULL;
     fitsfile* output          = NULL;
     char*     output_name     = NULL;
     const char** leftovers    = NULL;
 
     fip_pipe_cuda_state* pipe = NULL;
-    fip_pipe_iter_state state = {{0, -1, 0, 0, 0}, {0, NULL}};
+    fip_pipe_iter_state  state;
 
 
     long long image_size      = 1024;
@@ -170,8 +381,17 @@ int main_pipe(int argc, char* argv[]){
     long long snap_count_final   = 0;
     int       verbose         = 0;
     int       gpu_ordinal     = 0;
+    size_t    num_channels    = 0;
+    size_t    num_rows_max    = 0;
+    size_t    num_rows;
     size_t    unit_num;
     size_t    snap_count_file_out;
+    size_t    i;
+
+
+    Table                 input, spw, subset;
+    TableIterator         iter;
+    ROArrayColumn<double> chan_freq_col;
 
 
     /**
@@ -306,14 +526,41 @@ int main_pipe(int argc, char* argv[]){
 
     /**
      * Open input file.
-     * 
+     *
      * Also collect the file's vital statistics, enabling its validation and
      * that of the program's other arguments.
      */
 
-    if(fip_input_open_diskfile(&input,  input_name,       READONLY,           &fits_status) ||
-       fip_input_get_stats    ( input, &snap_count_file, &num_baselines_file, &fits_status))
+    if(!Table::isReadable(input_name)){
+        fprintf(stderr, "Error: %s is not readable!\n", input_name);
         goto fitsfail;
+    }
+    input  = Table(input_name, Table::Old);
+    spw    = input.keywordSet().asTable("SPECTRAL_WINDOW");
+    subset = input.tableDesc().isColumn("FLAG_ROW") ? input(!input.col("FLAG_ROW")) : input;
+    iter   = TableIterator(subset, "TIME", TableIterator::Ascending,
+                                           TableIterator::QuickSort);
+
+
+    chan_freq_col = ROArrayColumn<double>(spw, "CHAN_FREQ");
+    if(chan_freq_col.shapeColumn().empty())
+        for(i=0; i<chan_freq_col.nrow(); i++)
+            num_channels += chan_freq_col.shape(i).product();
+    else
+        num_channels = (size_t)chan_freq_col.shapeColumn().product();
+
+
+    for(snap_count_file=0; !iter.pastEnd(); iter++){
+        num_rows = (size_t)iter.table().nrow();
+        if(num_rows == 0)
+            continue;
+
+        snap_count_file++;
+        num_rows_max = num_rows_max > num_rows ?
+                       num_rows_max : num_rows;
+    }
+    num_baselines_file = num_rows_max * num_channels;
+
 
     if(snap_count_file < 3){
         fprintf(stderr, "Input file %s has %lld<3 snapshots!\n", input_name, snap_count_file);
@@ -503,28 +750,17 @@ int main_pipe(int argc, char* argv[]){
         default:
             goto fitsfail;
     }
+    if(fits_status)
+        goto fitsfail;
 
 
     /* Execute Pipeline */
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.transform_off,    NULL, &fits_status);
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.visibilities_off, NULL, &fits_status);
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.coords_off,       NULL, &fits_status);
-    state.input.fd      = open(input_name, O_RDONLY|O_NOCTTY|O_CLOEXEC, 0);
-    state.input.status  = 0;
-    state.output.status = 0;
-    state.output.result = output;
-    if(fits_status || state.input.fd<0)
-        goto fitsfail;
-
+    state = fip_pipe_iter_state(subset, output).skip(snap_start_final);
     if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto cudafail;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
                              snap_start_final, snap_end_final);
     fip_pipe_cuda_clear(&pipe);
-
     fits_flush_file(output, &fits_status);
 
 
@@ -534,13 +770,6 @@ int main_pipe(int argc, char* argv[]){
     if(fits_status){
         fits_report_error(stderr, fits_status);
     }
-    if(state.input.fd>=0){
-        close(state.input.fd);
-    }else{
-        rc = EXIT_FAILURE;
-    }
-    if(input)
-        fits_close_file(input,  &fits_status), input  = NULL;
     if(output)
         fits_close_file(output, &fits_status), output = NULL;
 
