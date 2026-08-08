@@ -50,7 +50,7 @@ int main_info(int argc, char* argv[]){
     /* Iterate and print snapshot details. */
     for(num_snapshots=0; !iter.pastEnd(); iter++){
         Table snapshot = iter.table();
-        num_rows = (size_t)iter.table().nrow();
+        num_rows = (size_t)snapshot.nrow();
         if(num_rows == 0)
             continue; /* No usable rows. Skip. */
 
