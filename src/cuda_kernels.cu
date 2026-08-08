@@ -340,7 +340,7 @@ __global__ void interp         (float*           image,
              */
 
             r = h;
-            if(h < r0*sqrtf(0.5f)){
+            if(h >= r0*sqrtf(0.5f)){
                 z =            1.0f - sqrtf(1.0f - hr0*hr0);
             }else{
                 z = hr0*hr0 / (1.0f + sqrtf(1.0f - hr0*hr0));
