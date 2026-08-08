@@ -1257,8 +1257,8 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
         fip_pipe_cuda_await     (pipe, i, ITER_FFT,        pipe->stream.interpolation, 0);
         fip_pipe_cuda_lock      (pipe, i, RING_IMAGE_GPU,  pipe->stream.interpolation, 0);
         cudaMemsetAsync         (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i), 0,
-                                 pipe->ring.stride.grid *
-                                 pipe->param.grid_size  * sizeof(float),
+                                 pipe->ring.stride.image *
+                                 pipe->param.image_size  * sizeof(float),
                                  pipe->stream.interpolation);
         fip_cuda_kernel_interp  (pipe->launch.Bs,
                                  pipe->launch.Ts, 0,
