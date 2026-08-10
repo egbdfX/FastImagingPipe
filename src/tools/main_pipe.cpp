@@ -46,7 +46,9 @@ struct fip_pipe_iter_state{
                         input_iteration(0),
                         array_center(0),
                         output(output),
-                        output_status(0){
+                        output_status(0),
+                        has_old_transform(0){
+        memset(old_transform, 0, sizeof(old_transform[0][0])*3*3);
         if(!input.isNull())
             reset_iterator();
     }
@@ -55,6 +57,7 @@ struct fip_pipe_iter_state{
         iter = TableIterator(input, "TIME", TableIterator::Ascending,
                                             TableIterator::QuickSort);
         input_iteration = 0;
+        has_old_transform = 0;
         chan_freq       = ROArrayColumn<Double>(input.keywordSet()
                                                      .asTable("SPECTRAL_WINDOW"),
                                                 "CHAN_FREQ").getColumn();
@@ -299,7 +302,49 @@ struct fip_pipe_iter_state{
         transform[2][2] = r22;
 
 
-        /* Coordinates, Part IV: Project. */
+        /* Coordinates, Part IV: Align against previous transform. */
+        if(has_old_transform){
+            float dp0 = old_transform[0][0]*transform[0][0] +
+                        old_transform[0][1]*transform[0][1] +
+                        old_transform[0][2]*transform[0][2];
+            if(dp0 < 0){
+                transform[0][0] = -transform[0][0];
+                transform[0][1] = -transform[0][1];
+                transform[0][2] = -transform[0][2];
+            }
+
+            float dp1 = old_transform[1][0]*transform[1][0] +
+                        old_transform[1][1]*transform[1][1] +
+                        old_transform[1][2]*transform[1][2];
+            if(dp1 < 0){
+                transform[1][0] = -transform[1][0];
+                transform[1][1] = -transform[1][1];
+                transform[1][2] = -transform[1][2];
+            }
+
+            if(dp0 < 0 || dp1 < 0){
+                const float r00 = transform[0][0];
+                const float r01 = transform[0][1];
+                const float r02 = transform[0][2];
+                const float r10 = transform[1][0];
+                const float r11 = transform[1][1];
+                const float r12 = transform[1][2];
+
+                float r20 = r01*r12 - r02*r11;
+                float r21 = r02*r10 - r00*r12;
+                float r22 = r00*r11 - r01*r10;
+                normalize3(&r20, &r21, &r22);
+
+                transform[2][0] = r20;
+                transform[2][1] = r21;
+                transform[2][2] = r22;
+            }
+        }
+        memcpy(old_transform, transform, sizeof(old_transform[0][0])*3*3);
+        has_old_transform = 1;
+
+
+        /* Coordinates, Part V: Project. */
         for(size_t i=0;i<num_rows;i++){
             u = ptr_uvw[3*i+0];
             v = ptr_uvw[3*i+1];
@@ -441,6 +486,9 @@ struct fip_pipe_iter_state{
     double        array_center;
     fitsfile*     output;
     int           output_status;
+
+    float         old_transform[3][3];
+    int           has_old_transform;
 };
 
 static char* fip_strdup(const char* s){
