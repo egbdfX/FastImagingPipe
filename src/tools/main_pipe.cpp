@@ -175,29 +175,34 @@ struct fip_pipe_iter_state{
             throw std::runtime_error("Unexpected stride!");
 
         Double*  ptr_uvw    = uvw .data();
-        Complex* ptr_data   = data.data();
-        Bool*    ptr_flag   = flag.data();
-        Float*   ptr_weight = weight.empty() ? NULL : weight.data();
         Double*  ptr_freq   = chan_freq.data();
 
 
         /* Visibilities */
         for(size_t i=0;i<num_rows;i++){
+            Array<Complex> data_row = data[i];
+            Array<Bool>    flag_row = flag[i];
+            Array<Float>   weight_row;
+            if(has_weight_spectrum)
+                weight_row = weight[i];
+
             for(size_t j=0;j<num_channels;j++){
-                Complex vis0    = *ptr_data++;
-                Complex vis3    = merge_two_pols ? *ptr_data++ : 0;
-                Bool    flag0   = *ptr_flag++;
-                Bool    flag3   = merge_two_pols ? *ptr_flag++ : 1;
-                Float   weight0 = has_weight_spectrum                   ? *ptr_weight++ : 1.0f;
-                Float   weight3 = merge_two_pols ? (has_weight_spectrum ? *ptr_weight++ : 1.0f) : 0.0f;
+                const IPosition pol0_index{0, (long)j};
+                const IPosition pol3_index{1, (long)j};
+                Complex vis0    = data_row(pol0_index);
+                Complex vis3    = merge_two_pols ? data_row(pol3_index) : 0;
+                Bool    flag0   = flag_row(pol0_index);
+                Bool    flag3   = merge_two_pols ? flag_row(pol3_index) : 1;
+                Float   weight0 = has_weight_spectrum                   ? weight_row(pol0_index) : 1.0f;
+                Float   weight3 = merge_two_pols ? (has_weight_spectrum ? weight_row(pol3_index) : 1.0f) : 0.0f;
 
                 Float   w0      = flag0 ? 0.0f : weight0;
                 Float   w3      = flag3 ? 0.0f : weight3;
-                Float   w_sum   = weight0+weight3;
+                Float   w_sum   = w0+w3;
                 if(w_sum > 0.0f){
-                    *visibilities++ = (vis0*w0 + vis3*w3)/w_sum;
+                    visibilities[num_channels*i+j] = (vis0*w0 + vis3*w3)/w_sum;
                 }else{
-                    *visibilities++ = 0;
+                    visibilities[num_channels*i+j] = 0;
                 }
             }
         }
@@ -245,24 +250,53 @@ struct fip_pipe_iter_state{
                 covariance[2][2] += x2*x2;
             }
         }
-        covariance[0][0] /= num_baselines;
-        covariance[0][1] /= num_baselines;
-        covariance[0][2] /= num_baselines;
-        covariance[1][1] /= num_baselines;
-        covariance[1][2] /= num_baselines;
-        covariance[2][2] /= num_baselines;
         covariance[1][0]  = covariance[0][1];
         covariance[2][0]  = covariance[0][2];
         covariance[2][1]  = covariance[1][2];
 
 
         /* Coordinates, Part III: SVD. */
-        Double eigenvalues    [3] =  {0,0,0};
-        Double eigenvectors[3][3] = {{1,0,0}, {0,1,0}, {0,0,1}};
-        /* FILL ME! */
-        for(size_t i=0;i<3;i++)
-            for(size_t j=0;j<3;j++)
-                transform[i][j] = eigenvectors[i][j];
+        float covariancef [3][3] = {{(float)covariance[0][0], (float)covariance[0][1], (float)covariance[0][2]},
+                                    {(float)covariance[1][0], (float)covariance[1][1], (float)covariance[1][2]},
+                                    {(float)covariance[2][0], (float)covariance[2][1], (float)covariance[2][2]}};
+        float eigenvalues    [3] =  {0,0,0};
+        float eigenvectors[3][3] = {{1,0,0}, {0,1,0}, {0,0,1}};
+        jacobi_eigen_3x3((float*)covariancef, eigenvalues, (float*)eigenvectors);
+
+        transform[0][0] = eigenvectors[0][2];
+        transform[1][0] = eigenvectors[0][1];
+        transform[0][1] = eigenvectors[1][2];
+        transform[1][1] = eigenvectors[1][1];
+        transform[0][2] = eigenvectors[2][2];
+        transform[1][2] = eigenvectors[2][1];
+
+        if(transform[0][0] < 0){
+            transform[0][0] = -transform[0][0];
+            transform[0][1] = -transform[0][1];
+            transform[0][2] = -transform[0][2];
+        }
+
+        if(transform[1][1]*array_center >= 0){
+            transform[1][0] = -transform[1][0];
+            transform[1][1] = -transform[1][1];
+            transform[1][2] = -transform[1][2];
+        }
+
+        const float r00 = transform[0][0];
+        const float r01 = transform[0][1];
+        const float r02 = transform[0][2];
+        const float r10 = transform[1][0];
+        const float r11 = transform[1][1];
+        const float r12 = transform[1][2];
+
+        float r20 = r01*r12 - r02*r11;
+        float r21 = r02*r10 - r00*r12;
+        float r22 = r00*r11 - r01*r10;
+        normalize3(&r20, &r21, &r22);
+
+        transform[2][0] = r20;
+        transform[2][1] = r21;
+        transform[2][2] = r22;
 
 
         /* Coordinates, Part IV: Project. */
@@ -272,17 +306,131 @@ struct fip_pipe_iter_state{
             w = ptr_uvw[3*i+2];
 
             for(size_t j=0;j<num_channels;j++){
-                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
-                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
-                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
 
-                coordinates[2*(num_channels*i+j) + 0] = eigenvectors[0][0]*x0 +
-                                                        eigenvectors[0][1]*x1 +
-                                                        eigenvectors[0][2]*x2;
-                coordinates[2*(num_channels*i+j) + 1] = eigenvectors[1][0]*x0 +
-                                                        eigenvectors[1][1]*x1 +
-                                                        eigenvectors[1][2]*x2;
+                coordinates[2*(num_channels*i+j) + 0] = transform[0][0]*x0 +
+                                                        transform[0][1]*x1 +
+                                                        transform[0][2]*x2;
+                coordinates[2*(num_channels*i+j) + 1] = transform[1][0]*x0 +
+                                                        transform[1][1]*x1 +
+                                                        transform[1][2]*x2;
             }
+        }
+    }
+
+    static void jacobi_eigen_3x3(float* matrix, float* eigenvalues, float* eigenvectors){
+        eigenvectors[0] = 1.0f;
+        eigenvectors[1] = 0.0f;
+        eigenvectors[2] = 0.0f;
+        eigenvectors[3] = 0.0f;
+        eigenvectors[4] = 1.0f;
+        eigenvectors[5] = 0.0f;
+        eigenvectors[6] = 0.0f;
+        eigenvectors[7] = 0.0f;
+        eigenvectors[8] = 1.0f;
+
+        for (int iter = 0; iter < 16; ++iter) {
+            int p = 0;
+            int q = 1;
+            float max_offdiag = fabsf(matrix[1]);
+            const float a02 = fabsf(matrix[2]);
+            const float a12 = fabsf(matrix[5]);
+            if (a02 > max_offdiag) {
+                p = 0;
+                q = 2;
+                max_offdiag = a02;
+            }
+            if (a12 > max_offdiag) {
+                p = 1;
+                q = 2;
+                max_offdiag = a12;
+            }
+            const float diag_scale = fmaxf(
+                1.0f,
+                fmaxf(fabsf(matrix[0]), fmaxf(fabsf(matrix[4]), fabsf(matrix[8])))
+            );
+            if (max_offdiag <= 1.0e-6f * diag_scale) {
+                break;
+            }
+
+            const float app = matrix[p * 3 + p];
+            const float aqq = matrix[q * 3 + q];
+            const float apq = matrix[p * 3 + q];
+            const float tau = (aqq - app) / (2.0f * apq);
+            const float tau_sign = tau < 0.0f ? -1.0f : 1.0f;
+            const float t = tau_sign / (fabsf(tau) + sqrtf(1.0f + tau * tau));
+            const float c = 1.0f/sqrtf(1.0f + t * t);
+            const float s = t * c;
+
+            for (int k = 0; k < 3; ++k) {
+                if (k != p && k != q) {
+                    const float akp = matrix[k * 3 + p];
+                    const float akq = matrix[k * 3 + q];
+                    const float new_akp = c * akp - s * akq;
+                    const float new_akq = s * akp + c * akq;
+                    matrix[k * 3 + p] = new_akp;
+                    matrix[p * 3 + k] = new_akp;
+                    matrix[k * 3 + q] = new_akq;
+                    matrix[q * 3 + k] = new_akq;
+                }
+            }
+
+            matrix[p * 3 + p] = c * c * app - 2.0f * c * s * apq + s * s * aqq;
+            matrix[q * 3 + q] = s * s * app + 2.0f * c * s * apq + c * c * aqq;
+            matrix[p * 3 + q] = 0.0f;
+            matrix[q * 3 + p] = 0.0f;
+
+            for (int row = 0; row < 3; ++row) {
+                const float vip = eigenvectors[row * 3 + p];
+                const float viq = eigenvectors[row * 3 + q];
+                eigenvectors[row * 3 + p] = c * vip - s * viq;
+                eigenvectors[row * 3 + q] = s * vip + c * viq;
+            }
+        }
+
+        eigenvalues[0] = matrix[0];
+        eigenvalues[1] = matrix[4];
+        eigenvalues[2] = matrix[8];
+        if (eigenvalues[0] > eigenvalues[1]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 0, 1);
+        }
+        if (eigenvalues[1] > eigenvalues[2]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 1, 2);
+        }
+        if (eigenvalues[0] > eigenvalues[1]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 0, 1);
+        }
+
+        for (int col = 0; col < 3; ++col) {
+            float x = eigenvectors[0 * 3 + col];
+            float y = eigenvectors[1 * 3 + col];
+            float z = eigenvectors[2 * 3 + col];
+            normalize3(&x, &y, &z);
+            eigenvectors[0 * 3 + col] = x;
+            eigenvectors[1 * 3 + col] = y;
+            eigenvectors[2 * 3 + col] = z;
+        }
+    }
+
+    static void swap_eigen_columns(float* eigenvalues, float* eigenvectors, int a, int b){
+        const float value = eigenvalues[a];
+        eigenvalues[a] = eigenvalues[b];
+        eigenvalues[b] = value;
+        for (int row = 0; row < 3; ++row) {
+            const float vector_value = eigenvectors[row * 3 + a];
+            eigenvectors[row * 3 + a] = eigenvectors[row * 3 + b];
+            eigenvectors[row * 3 + b] = vector_value;
+        }
+    }
+
+    static void normalize3(float* x, float* y, float* z) {
+        const float norm = sqrtf((*x) * (*x) + (*y) * (*y) + (*z) * (*z));
+        if (norm > 0.0f) {
+            *x /= norm;
+            *y /= norm;
+            *z /= norm;
         }
     }
 
