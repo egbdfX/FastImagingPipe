@@ -537,7 +537,7 @@ int main_pipe(int argc, char* argv[]){
     }
     input  = Table(input_name, Table::Old);
     spw    = input.keywordSet().asTable("SPECTRAL_WINDOW");
-    subset = input.tableDesc().isColumn("FLAG_ROW") ? input(!input.col("FLAG_ROW")) : input;
+    subset = input;
     iter   = TableIterator(subset, "TIME", TableIterator::Ascending,
                                            TableIterator::QuickSort);
 
