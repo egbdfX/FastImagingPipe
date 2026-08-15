@@ -5,6 +5,18 @@
 #include <fitsio.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <assert.h>
+
+#include <casacore/casa/Arrays/Array.h>
+#include <casacore/casa/Arrays/ArrayAccessor.h>
+#include <casacore/casa/Arrays/IPosition.h>
+#include <casacore/casa/Quanta/MVTime.h>
+#include <casacore/casa/Quanta/Unit.h>
+#include <casacore/tables/Tables/ArrayColumn.h>
+#include <casacore/tables/Tables/Table.h>
+#include <casacore/tables/Tables/TableIter.h>
+#include <casacore/tables/Tables/TableRecord.h>
+#include <casacore/tables/TaQL.h>
 
 #include "fip/cuda_pipeline.h"
 #include "fits_utils.h"
@@ -20,22 +32,464 @@
 #define  END_OFFSET_FLAG_DEFAULT          0
 #define  SNAP_COUNT_FLAG_DEFAULT         -1
 
+#define  K_SPEED_OF_LIGHT         299792458.0f
+
+
+/* We heavily use CASACore objects, so import the namespace. */
+using namespace casacore;
 
 
 /* fip pipe implementation. */
-typedef struct{
-    struct{
-        int       status;
-        int       fd;
-        long long transform_off;
-        long long visibilities_off;
-        long long coords_off;
-    } input;
-    struct{
-        int       status;
-        fitsfile* result;
-    } output;
-} fip_pipe_iter_state;
+struct fip_pipe_iter_state{
+    fip_pipe_iter_state(Table input=Table(), fitsfile* output=NULL) :
+                        input(input),
+                        input_iteration(0),
+                        array_center(0),
+                        output(output),
+                        output_status(0),
+                        has_old_transform(0){
+        memset(old_transform, 0, sizeof(old_transform[0][0])*3*3);
+        if(!input.isNull())
+            reset_iterator();
+    }
+
+    fip_pipe_iter_state& reset_iterator(void){
+        iter = TableIterator(input, "TIME", TableIterator::Ascending,
+                                            TableIterator::QuickSort);
+        input_iteration = 0;
+        has_old_transform = 0;
+        chan_freq       = ROArrayColumn<Double>(input.keywordSet()
+                                                     .asTable("SPECTRAL_WINDOW"),
+                                                "CHAN_FREQ").getColumn();
+
+        Table observation = input.keywordSet().asTable("OBSERVATION");
+        if(observation.nrow() > 0 &&
+           observation.tableDesc().isColumn("ARRAY_CENTER")){
+            ROArrayColumn<Double> array_center_col(observation, "ARRAY_CENTER");
+            Vector<Double> array_center_vec = array_center_col.get(0);
+            if(array_center_vec.size() > 0){
+                array_center = array_center_vec[0];
+            }
+        }
+        return *this;
+    }
+
+    fip_pipe_iter_state& skip(size_t num){
+        for(size_t i=0;i<num;i++){
+            input_iteration++;
+            iter.next();
+        }
+        return *this;
+    }
+
+    void next(void*    userdata,
+              Complex* visibilities,
+              Float*   coordinates,
+              Float    transform[3][3],
+              size_t   num_baselines,
+              size_t   iteration){
+        (void)userdata;
+        (void)iteration;
+
+
+        /**
+         * Get current snapshot. Obtain vital information about it.
+         */
+
+        Table  snapshot = iter.table(); iter.next();
+        size_t num_rows = (size_t)snapshot.nrow();
+        const bool has_weight_spectrum = snapshot.tableDesc().isColumn("WEIGHT_SPECTRUM");
+
+
+        /**
+         * Open snapshot's columns with accessors.
+         *
+         * Also, get vital shape information from the first row of "DATA".
+         * MeasurementSet 2.0 specifies [1] that the shape of every row of "DATA" is
+         *
+         *     (DATA): Complex(Nc, Nf)
+         *
+         * where:
+         *
+         *     Nc = Number of correlators
+         *     Nf = Number of frequency channels
+         *
+         * Here we take num_pols=Nc, and num_channels=Nf.
+         *
+         * [1] https://casacore.github.io/casacore-notes/229.html#x1-630005.1
+         */
+
+        ROArrayColumn<Double>  uvw_col (snapshot, "UVW"); /* Raw Coordinates */
+        ROArrayColumn<Complex> data_col(snapshot, "DATA");/* Raw Visibilities */
+        ROArrayColumn<Bool>    flag_col(snapshot, "FLAG");/* Flag vector */
+        ROArrayColumn<Float>   weight_col;                /* Optional weights */
+        if(has_weight_spectrum)
+            weight_col = ROArrayColumn<Float>(snapshot, "WEIGHT_SPECTRUM");
+        size_t num_pols       = data_col.shape(0)[0];
+        size_t num_channels   = data_col.shape(0)[1];
+        bool   merge_two_pols = num_pols > 1;
+        if(num_baselines < num_rows*num_channels)
+            throw std::runtime_error("DATA has more baselines than expected!");
+        if(num_pols != 1 && num_pols != 2 && num_pols != 4)
+            throw std::runtime_error("DATA has unexpected number of "
+                                     "polarizations, neither 1 nor 2 nor 4!");
+
+
+        /**
+         * To optimize data-loading, use a Slicer object designed to select the
+         * one or two polarizations only we want: Either {0}, {0,1} or {0,3}.
+         *
+         * We use this slicer in the identically-shaped arrays "DATA" and "FLAG".
+         */
+
+        Slice  pol_slice = !merge_two_pols ? Slice(0) : Slice(0, 2, num_pols-1);
+        Slicer pol_slicer{pol_slice, Slice()};
+        Array<Double>  uvw  = uvw_col   .getColumn();
+        Array<Complex> data = data_col  .getColumn(pol_slicer);
+        Array<Bool>    flag = flag_col  .getColumn(pol_slicer);
+        Array<Float>   weight;
+        if(has_weight_spectrum){
+            weight          = weight_col.getColumn(pol_slicer);
+        }
+
+
+        /**
+         * We now have the data. Process it. Our loops assume contiguous storage.
+         *
+         * Fill the visibilities array under control of the flags and weights.
+         * Then, compute the coordinates.
+         */
+
+        if(!uvw   .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( uvw   .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!data  .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( data  .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!flag  .contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( flag  .steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+        if(!weight.contiguousStorage())
+            throw std::runtime_error("Storage unexpectedly not contiguous!");
+        if( weight.steps()[0] != 1)
+            throw std::runtime_error("Unexpected stride!");
+
+        Double*  ptr_uvw    = uvw .data();
+        Double*  ptr_freq   = chan_freq.data();
+
+
+        /* Visibilities */
+        for(size_t i=0;i<num_rows;i++){
+            Array<Complex> data_row = data[i];
+            Array<Bool>    flag_row = flag[i];
+            Array<Float>   weight_row;
+            if(has_weight_spectrum)
+                weight_row = weight[i];
+
+            for(size_t j=0;j<num_channels;j++){
+                const IPosition pol0_index{0, (long)j};
+                const IPosition pol3_index{1, (long)j};
+                Complex vis0    = data_row(pol0_index);
+                Complex vis3    = merge_two_pols ? data_row(pol3_index) : 0;
+                Bool    flag0   = flag_row(pol0_index);
+                Bool    flag3   = merge_two_pols ? flag_row(pol3_index) : 1;
+                Float   weight0 = has_weight_spectrum                   ? weight_row(pol0_index) : 1.0f;
+                Float   weight3 = merge_two_pols ? (has_weight_spectrum ? weight_row(pol3_index) : 1.0f) : 0.0f;
+
+                Float   w0      = flag0 ? 0.0f : weight0;
+                Float   w3      = flag3 ? 0.0f : weight3;
+                Float   w_sum   = w0+w3;
+                if(w_sum > 0.0f){
+                    visibilities[num_channels*i+j] = (vis0*w0 + vis3*w3)/w_sum;
+                }else{
+                    visibilities[num_channels*i+j] = 0;
+                }
+            }
+        }
+
+
+        /* Coordinates, Part I: Mean. */
+        Double x0avg=0, x1avg=0, x2avg=0, x0, x1, x2, u, v, w;
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+
+                x0avg += x0;
+                x1avg += x1;
+                x2avg += x2;
+            }
+        }
+        x0avg /= num_baselines;
+        x1avg /= num_baselines;
+        x2avg /= num_baselines;
+
+
+        /* Coordinates, Part II: Covariance. */
+        Double covariance[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
+
+                covariance[0][0] += x0*x0;
+                covariance[0][1] += x0*x1;
+                covariance[0][2] += x0*x2;
+                covariance[1][1] += x1*x1;
+                covariance[1][2] += x1*x2;
+                covariance[2][2] += x2*x2;
+            }
+        }
+        covariance[1][0]  = covariance[0][1];
+        covariance[2][0]  = covariance[0][2];
+        covariance[2][1]  = covariance[1][2];
+
+
+        /* Coordinates, Part III: SVD. */
+        float covariancef [3][3] = {{(float)covariance[0][0], (float)covariance[0][1], (float)covariance[0][2]},
+                                    {(float)covariance[1][0], (float)covariance[1][1], (float)covariance[1][2]},
+                                    {(float)covariance[2][0], (float)covariance[2][1], (float)covariance[2][2]}};
+        float eigenvalues    [3] =  {0,0,0};
+        float eigenvectors[3][3] = {{1,0,0}, {0,1,0}, {0,0,1}};
+        jacobi_eigen_3x3((float*)covariancef, eigenvalues, (float*)eigenvectors);
+
+        transform[0][0] = eigenvectors[0][2];
+        transform[1][0] = eigenvectors[0][1];
+        transform[0][1] = eigenvectors[1][2];
+        transform[1][1] = eigenvectors[1][1];
+        transform[0][2] = eigenvectors[2][2];
+        transform[1][2] = eigenvectors[2][1];
+
+        if(transform[0][0] < 0){
+            transform[0][0] = -transform[0][0];
+            transform[0][1] = -transform[0][1];
+            transform[0][2] = -transform[0][2];
+        }
+
+        if(transform[1][1]*array_center >= 0){
+            transform[1][0] = -transform[1][0];
+            transform[1][1] = -transform[1][1];
+            transform[1][2] = -transform[1][2];
+        }
+
+        const float r00 = transform[0][0];
+        const float r01 = transform[0][1];
+        const float r02 = transform[0][2];
+        const float r10 = transform[1][0];
+        const float r11 = transform[1][1];
+        const float r12 = transform[1][2];
+
+        float r20 = r01*r12 - r02*r11;
+        float r21 = r02*r10 - r00*r12;
+        float r22 = r00*r11 - r01*r10;
+        normalize3(&r20, &r21, &r22);
+
+        transform[2][0] = r20;
+        transform[2][1] = r21;
+        transform[2][2] = r22;
+
+
+        /* Coordinates, Part IV: Align against previous transform. */
+        if(has_old_transform){
+            float dp0 = old_transform[0][0]*transform[0][0] +
+                        old_transform[0][1]*transform[0][1] +
+                        old_transform[0][2]*transform[0][2];
+            if(dp0 < 0){
+                transform[0][0] = -transform[0][0];
+                transform[0][1] = -transform[0][1];
+                transform[0][2] = -transform[0][2];
+            }
+
+            float dp1 = old_transform[1][0]*transform[1][0] +
+                        old_transform[1][1]*transform[1][1] +
+                        old_transform[1][2]*transform[1][2];
+            if(dp1 < 0){
+                transform[1][0] = -transform[1][0];
+                transform[1][1] = -transform[1][1];
+                transform[1][2] = -transform[1][2];
+            }
+
+            if(dp0 < 0 || dp1 < 0){
+                const float r00 = transform[0][0];
+                const float r01 = transform[0][1];
+                const float r02 = transform[0][2];
+                const float r10 = transform[1][0];
+                const float r11 = transform[1][1];
+                const float r12 = transform[1][2];
+
+                float r20 = r01*r12 - r02*r11;
+                float r21 = r02*r10 - r00*r12;
+                float r22 = r00*r11 - r01*r10;
+                normalize3(&r20, &r21, &r22);
+
+                transform[2][0] = r20;
+                transform[2][1] = r21;
+                transform[2][2] = r22;
+            }
+        }
+        memcpy(old_transform, transform, sizeof(old_transform[0][0])*3*3);
+        has_old_transform = 1;
+
+
+        /* Coordinates, Part V: Project. */
+        for(size_t i=0;i<num_rows;i++){
+            u = ptr_uvw[3*i+0];
+            v = ptr_uvw[3*i+1];
+            w = ptr_uvw[3*i+2];
+
+            for(size_t j=0;j<num_channels;j++){
+                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
+
+                coordinates[2*(num_channels*i+j) + 0] = transform[0][0]*x0 +
+                                                        transform[0][1]*x1 +
+                                                        transform[0][2]*x2;
+                coordinates[2*(num_channels*i+j) + 1] = transform[1][0]*x0 +
+                                                        transform[1][1]*x1 +
+                                                        transform[1][2]*x2;
+            }
+        }
+    }
+
+    static void jacobi_eigen_3x3(float* matrix, float* eigenvalues, float* eigenvectors){
+        eigenvectors[0] = 1.0f;
+        eigenvectors[1] = 0.0f;
+        eigenvectors[2] = 0.0f;
+        eigenvectors[3] = 0.0f;
+        eigenvectors[4] = 1.0f;
+        eigenvectors[5] = 0.0f;
+        eigenvectors[6] = 0.0f;
+        eigenvectors[7] = 0.0f;
+        eigenvectors[8] = 1.0f;
+
+        for (int iter = 0; iter < 16; ++iter) {
+            int p = 0;
+            int q = 1;
+            float max_offdiag = fabsf(matrix[1]);
+            const float a02 = fabsf(matrix[2]);
+            const float a12 = fabsf(matrix[5]);
+            if (a02 > max_offdiag) {
+                p = 0;
+                q = 2;
+                max_offdiag = a02;
+            }
+            if (a12 > max_offdiag) {
+                p = 1;
+                q = 2;
+                max_offdiag = a12;
+            }
+            const float diag_scale = fmaxf(
+                1.0f,
+                fmaxf(fabsf(matrix[0]), fmaxf(fabsf(matrix[4]), fabsf(matrix[8])))
+            );
+            if (max_offdiag <= 1.0e-6f * diag_scale) {
+                break;
+            }
+
+            const float app = matrix[p * 3 + p];
+            const float aqq = matrix[q * 3 + q];
+            const float apq = matrix[p * 3 + q];
+            const float tau = (aqq - app) / (2.0f * apq);
+            const float tau_sign = tau < 0.0f ? -1.0f : 1.0f;
+            const float t = tau_sign / (fabsf(tau) + sqrtf(1.0f + tau * tau));
+            const float c = 1.0f/sqrtf(1.0f + t * t);
+            const float s = t * c;
+
+            for (int k = 0; k < 3; ++k) {
+                if (k != p && k != q) {
+                    const float akp = matrix[k * 3 + p];
+                    const float akq = matrix[k * 3 + q];
+                    const float new_akp = c * akp - s * akq;
+                    const float new_akq = s * akp + c * akq;
+                    matrix[k * 3 + p] = new_akp;
+                    matrix[p * 3 + k] = new_akp;
+                    matrix[k * 3 + q] = new_akq;
+                    matrix[q * 3 + k] = new_akq;
+                }
+            }
+
+            matrix[p * 3 + p] = c * c * app - 2.0f * c * s * apq + s * s * aqq;
+            matrix[q * 3 + q] = s * s * app + 2.0f * c * s * apq + c * c * aqq;
+            matrix[p * 3 + q] = 0.0f;
+            matrix[q * 3 + p] = 0.0f;
+
+            for (int row = 0; row < 3; ++row) {
+                const float vip = eigenvectors[row * 3 + p];
+                const float viq = eigenvectors[row * 3 + q];
+                eigenvectors[row * 3 + p] = c * vip - s * viq;
+                eigenvectors[row * 3 + q] = s * vip + c * viq;
+            }
+        }
+
+        eigenvalues[0] = matrix[0];
+        eigenvalues[1] = matrix[4];
+        eigenvalues[2] = matrix[8];
+        if (eigenvalues[0] > eigenvalues[1]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 0, 1);
+        }
+        if (eigenvalues[1] > eigenvalues[2]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 1, 2);
+        }
+        if (eigenvalues[0] > eigenvalues[1]) {
+            swap_eigen_columns(eigenvalues, eigenvectors, 0, 1);
+        }
+
+        for (int col = 0; col < 3; ++col) {
+            float x = eigenvectors[0 * 3 + col];
+            float y = eigenvectors[1 * 3 + col];
+            float z = eigenvectors[2 * 3 + col];
+            normalize3(&x, &y, &z);
+            eigenvectors[0 * 3 + col] = x;
+            eigenvectors[1 * 3 + col] = y;
+            eigenvectors[2 * 3 + col] = z;
+        }
+    }
+
+    static void swap_eigen_columns(float* eigenvalues, float* eigenvectors, int a, int b){
+        const float value = eigenvalues[a];
+        eigenvalues[a] = eigenvalues[b];
+        eigenvalues[b] = value;
+        for (int row = 0; row < 3; ++row) {
+            const float vector_value = eigenvectors[row * 3 + a];
+            eigenvectors[row * 3 + a] = eigenvectors[row * 3 + b];
+            eigenvectors[row * 3 + b] = vector_value;
+        }
+    }
+
+    static void normalize3(float* x, float* y, float* z) {
+        const float norm = sqrtf((*x) * (*x) + (*y) * (*y) + (*z) * (*z));
+        if (norm > 0.0f) {
+            *x /= norm;
+            *y /= norm;
+            *z /= norm;
+        }
+    }
+
+    Table         input;
+    size_t        input_iteration;
+    TableIterator iter;
+    Array<Double> chan_freq;
+    double        array_center;
+    fitsfile*     output;
+    int           output_status;
+
+    float         old_transform[3][3];
+    int           has_old_transform;
+};
 
 static char* fip_strdup(const char* s){
     char*  t;
@@ -52,65 +506,19 @@ static char* fip_strdup(const char* s){
     return (char*)memcpy(t, s, l+1);
 }
 
-static ssize_t pread_reliable(int fd, void* buf, size_t count, off_t offset){
-    ssize_t breadt;
-    ssize_t bread = 0;
-    char*   bufc  = (char*)buf;
-
-    while(bread < (ssize_t)count){
-        breadt = pread(fd, bufc+bread, count-(size_t)bread, offset+bread);
-        if(breadt <= 0){
-            return bread>0 ? bread : breadt;
-        }else{
-            bread += breadt;
-        }
-    }
-
-    return bread;
-}
-
 static void input_cb (void*  userdata0,
                       void*  userdata1,
                       void*  visibilities,
-                      float* coords,
+                      float* coordinates,
                       float  transform[3][3],
                       size_t num_baselines,
-                      size_t iter){
-    uint32_t             x;
-    size_t               i;
-    size_t               transform_count    = 3 * 3;
-    size_t               visibilities_count = 2 * num_baselines;
-    size_t               coords_count       = 2 * num_baselines;
-    size_t               transform_bytes    = transform_count    * sizeof(float);
-    size_t               visibilities_bytes = visibilities_count * sizeof(float);
-    size_t               coords_bytes       = coords_count       * sizeof(float);
-    fip_pipe_iter_state* state              = (fip_pipe_iter_state*)userdata0;
-    (void)userdata1;
-
-    pread_reliable(state->input.fd, transform,     transform_bytes,
-                   state->input.transform_off    + transform_bytes    * iter);
-    pread_reliable(state->input.fd, visibilities,  visibilities_bytes,
-                   state->input.visibilities_off + visibilities_bytes * iter);
-    pread_reliable(state->input.fd, coords,        coords_bytes,
-                   state->input.coords_off       + coords_bytes       * iter);
-
-    for(i=0; i<transform_count; i++){
-        memcpy(&x, &((float*)transform)[i],    sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&((float*)transform)[i], &x,    sizeof(uint32_t));
-    }
-    for(i=0; i<visibilities_count; i++){
-        memcpy(&x, &((float*)visibilities)[i], sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&((float*)visibilities)[i], &x, sizeof(uint32_t));
-    }
-    for(i=0; i<coords_count; i++){
-        memcpy(&x, &coords[i],                 sizeof(uint32_t)); x = __builtin_bswap32(x);
-        memcpy(&coords[i], &x,                 sizeof(uint32_t));
-    }
-
-    if(state->input.status){
-        fits_report_error(stderr, state->input.status);
-        fflush(stderr);
-    }
+                      size_t iteration){
+    ((fip_pipe_iter_state*)userdata0)->next(userdata1,
+                                            (Complex*)visibilities,
+                                            coordinates,
+                                            transform,
+                                            num_baselines,
+                                            iteration);
 }
 
 static void output_cb(void*  userdata0,
@@ -133,10 +541,10 @@ static void output_cb(void*  userdata0,
     long fres[3] = {1, 1,                           (long)iter+1-2};
     long lres[3] = {(long)unit_num, (long)unit_num, (long)iter+1-2};
 
-    fits_write_subset(state->output.result, TFLOAT, fres, lres, result, &state->output.status);
+    fits_write_subset(state->output, TFLOAT, fres, lres, result, &state->output_status);
 
-    if(state->output.status){
-        fits_report_error(stderr, state->output.status);
+    if(state->output_status){
+        fits_report_error(stderr, state->output_status);
         fflush(stderr);
     }
 }
@@ -146,14 +554,13 @@ int main_pipe(int argc, char* argv[]){
     int       rc              = EXIT_FAILURE;
     int       fits_status     = 0;
 
-    fitsfile* input           = NULL;
     char*     input_name      = NULL;
     fitsfile* output          = NULL;
     char*     output_name     = NULL;
     const char** leftovers    = NULL;
 
     fip_pipe_cuda_state* pipe = NULL;
-    fip_pipe_iter_state state = {{0, -1, 0, 0, 0}, {0, NULL}};
+    fip_pipe_iter_state  state;
 
 
     long long image_size      = 1024;
@@ -170,8 +577,17 @@ int main_pipe(int argc, char* argv[]){
     long long snap_count_final   = 0;
     int       verbose         = 0;
     int       gpu_ordinal     = 0;
+    size_t    num_channels    = 0;
+    size_t    num_rows_max    = 0;
+    size_t    num_rows;
     size_t    unit_num;
     size_t    snap_count_file_out;
+    size_t    i;
+
+
+    Table                 input, spw, subset;
+    TableIterator         iter;
+    ROArrayColumn<double> chan_freq_col;
 
 
     /**
@@ -306,14 +722,41 @@ int main_pipe(int argc, char* argv[]){
 
     /**
      * Open input file.
-     * 
+     *
      * Also collect the file's vital statistics, enabling its validation and
      * that of the program's other arguments.
      */
 
-    if(fip_input_open_diskfile(&input,  input_name,       READONLY,           &fits_status) ||
-       fip_input_get_stats    ( input, &snap_count_file, &num_baselines_file, &fits_status))
+    if(!Table::isReadable(input_name)){
+        fprintf(stderr, "Error: %s is not readable!\n", input_name);
         goto fitsfail;
+    }
+    input  = Table(input_name, Table::Old);
+    spw    = input.keywordSet().asTable("SPECTRAL_WINDOW");
+    subset = input;
+    iter   = TableIterator(subset, "TIME", TableIterator::Ascending,
+                                           TableIterator::QuickSort);
+
+
+    chan_freq_col = ROArrayColumn<double>(spw, "CHAN_FREQ");
+    if(chan_freq_col.shapeColumn().empty())
+        for(i=0; i<chan_freq_col.nrow(); i++)
+            num_channels += chan_freq_col.shape(i).product();
+    else
+        num_channels = (size_t)chan_freq_col.shapeColumn().product();
+
+
+    for(snap_count_file=0; !iter.pastEnd(); iter++){
+        num_rows = (size_t)iter.table().nrow();
+        if(num_rows == 0)
+            continue;
+
+        snap_count_file++;
+        num_rows_max = num_rows_max > num_rows ?
+                       num_rows_max : num_rows;
+    }
+    num_baselines_file = num_rows_max * num_channels;
+
 
     if(snap_count_file < 3){
         fprintf(stderr, "Input file %s has %lld<3 snapshots!\n", input_name, snap_count_file);
@@ -503,28 +946,17 @@ int main_pipe(int argc, char* argv[]){
         default:
             goto fitsfail;
     }
+    if(fits_status)
+        goto fitsfail;
 
 
     /* Execute Pipeline */
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.transform_off,    NULL, &fits_status);
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.visibilities_off, NULL, &fits_status);
-    fits_movrel_hdu   (input, +1,                                  NULL, &fits_status);
-    fits_get_hduaddrll(input, NULL, &state.input.coords_off,       NULL, &fits_status);
-    state.input.fd      = open(input_name, O_RDONLY|O_NOCTTY|O_CLOEXEC, 0);
-    state.input.status  = 0;
-    state.output.status = 0;
-    state.output.result = output;
-    if(fits_status || state.input.fd<0)
-        goto fitsfail;
-
+    state = fip_pipe_iter_state(subset, output).skip(snap_start_final);
     if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto cudafail;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
                              snap_start_final, snap_end_final);
     fip_pipe_cuda_clear(&pipe);
-
     fits_flush_file(output, &fits_status);
 
 
@@ -534,13 +966,6 @@ int main_pipe(int argc, char* argv[]){
     if(fits_status){
         fits_report_error(stderr, fits_status);
     }
-    if(state.input.fd>=0){
-        close(state.input.fd);
-    }else{
-        rc = EXIT_FAILURE;
-    }
-    if(input)
-        fits_close_file(input,  &fits_status), input  = NULL;
     if(output)
         fits_close_file(output, &fits_status), output = NULL;
 

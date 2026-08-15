@@ -80,8 +80,11 @@ enum fip_pipe_cuda_event{
                                   Not identical to ITER_DATA_WRITE for first 2 iterations. */
     ITER_NUM_EVENTS,           /* Number of loop events being recorded. */
 
+    /* Special events */
+    PIPE_1STOUT,               /* First output from pipe (end of third iteration) */
+
     /* Post-loop Events */
-    LOOP_END           = ITER_NUM_EVENTS,
+    LOOP_END,
     PIPE_END,
 };
 typedef enum fip_pipe_cuda_event fip_pipe_cuda_event;
@@ -146,9 +149,10 @@ struct fip_pipe_cuda_state{
         cudaEvent_t  malloc;
         cudaEvent_t  coeffsready;
         cudaEvent_t  loopstart;
-        cudaEvent_t  iter[4][ITER_NUM_EVENTS];
+        cudaEvent_t  iter[1500][ITER_NUM_EVENTS];
         cudaEvent_t  loopend;
         cudaEvent_t  pipeend;
+        cudaEvent_t  pipe1stout;
         struct{
             cudaEvent_t* vis_pinned;
             cudaEvent_t* vis_gpu;
@@ -544,6 +548,7 @@ static cudaError_t   fip_pipe_cuda_destroy_events            (fip_pipe_cuda_stat
     cudaEventDestroy(pipe->events.loopstart);
     cudaEventDestroy(pipe->events.loopend);
     cudaEventDestroy(pipe->events.pipeend);
+    cudaEventDestroy(pipe->events.pipe1stout);
 
     for(t=0; t<sizeof(pipe->events.iter) /
                sizeof(pipe->events.iter[0]); t++){
@@ -627,6 +632,7 @@ static cudaError_t   fip_pipe_cuda_create_events             (fip_pipe_cuda_stat
     cudaEventCreate(&pipe->events.loopstart);
     cudaEventCreate(&pipe->events.loopend);
     cudaEventCreate(&pipe->events.pipeend);
+    cudaEventCreate(&pipe->events.pipe1stout);
 
     for(t=0; t<sizeof(pipe->events.iter) /
                sizeof(pipe->events.iter[0]); t++){
@@ -673,10 +679,11 @@ static cudaError_t   fip_pipe_cuda_record                    (fip_pipe_cuda_stat
                                                               cudaStream_t             stream,
                                                               int                      flags){
     switch(code){
-        case PIPE_START: return cudaEventRecordWithFlags(pipe->events.pipestart, stream, flags);
-        case LOOP_START: return cudaEventRecordWithFlags(pipe->events.loopstart, stream, flags);
-        case PIPE_END:   return cudaEventRecordWithFlags(pipe->events.pipeend,   stream, flags);
-        case LOOP_END:   return cudaEventRecordWithFlags(pipe->events.loopend,   stream, flags);
+        case PIPE_START:  return cudaEventRecordWithFlags(pipe->events.pipestart,  stream, flags);
+        case LOOP_START:  return cudaEventRecordWithFlags(pipe->events.loopstart,  stream, flags);
+        case PIPE_END:    return cudaEventRecordWithFlags(pipe->events.pipeend,    stream, flags);
+        case LOOP_END:    return cudaEventRecordWithFlags(pipe->events.loopend,    stream, flags);
+        case PIPE_1STOUT: return cudaEventRecordWithFlags(pipe->events.pipe1stout, stream, flags);
         default:
             iter %= sizeof(pipe->events.iter) /
                     sizeof(pipe->events.iter[0]);
@@ -690,10 +697,11 @@ static cudaError_t   fip_pipe_cuda_await                     (fip_pipe_cuda_stat
                                                               cudaStream_t             stream,
                                                               int                      flags){
     switch(code){
-        case PIPE_START: return cudaStreamWaitEvent(stream, pipe->events.pipestart, flags);
-        case LOOP_START: return cudaStreamWaitEvent(stream, pipe->events.loopstart, flags);
-        case PIPE_END:   return cudaStreamWaitEvent(stream, pipe->events.pipeend,   flags);
-        case LOOP_END:   return cudaStreamWaitEvent(stream, pipe->events.loopend,   flags);
+        case PIPE_START:  return cudaStreamWaitEvent(stream, pipe->events.pipestart,  flags);
+        case LOOP_START:  return cudaStreamWaitEvent(stream, pipe->events.loopstart,  flags);
+        case PIPE_END:    return cudaStreamWaitEvent(stream, pipe->events.pipeend,    flags);
+        case LOOP_END:    return cudaStreamWaitEvent(stream, pipe->events.loopend,    flags);
+        case PIPE_1STOUT: return cudaStreamWaitEvent(stream, pipe->events.pipe1stout, flags);
         default:
             iter %= sizeof(pipe->events.iter) /
                     sizeof(pipe->events.iter[0]);
@@ -854,35 +862,103 @@ static cufftResult   fip_pipe_cuda_plan_fft                  (fip_pipe_cuda_stat
 }
 
 static void          fip_pipe_cuda_dump_timings              (fip_pipe_cuda_state*     pipe){
-    float milliseconds;
+    float  milliseconds=0, ttfo=0, fote=0, pipetime=0;
+    double data_read=0, copy_gpu=0, gridding=0, fft=0,
+           interp=0, tlisi=0, copy_cpu=0, data_write=0,
+           latency=0;
+    size_t count = 0, i=0, o=0, s=0, e=0, n=0;
+    size_t depth = sizeof(pipe->events.iter)/sizeof(pipe->events.iter[0]);
 
+    /* If logging disabled, early-exit */
     if(pipe->param.verbose < 20)
         return;
 
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_START],
-                                        pipe->events.iter[2][ITER_DATA_READ]);
-    printf("Time elapsed (Data Read):                   %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_DATA_READ],
-                                        pipe->events.iter[2][ITER_COPY_GPU]);
-    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_GPU],
-                                        pipe->events.iter[2][ITER_GRIDDING]);
-    printf("Time elapsed (Gridding):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_GRIDDING],
-                                        pipe->events.iter[2][ITER_FFT]);
-    printf("Time elapsed (FFT):                         %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_FFT],
-                                        pipe->events.iter[2][ITER_INTERP]);
-    printf("Time elapsed (Interpolation):               %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_INTERP],
-                                        pipe->events.iter[2][ITER_TLISI]);
-    printf("Time elapsed (tLISI):                       %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_TLISI],
-                                        pipe->events.iter[2][ITER_COPY_CPU]);
-    printf("Time elapsed (Copy GPU):                    %10.6f ms\n", (double)milliseconds);
-    cudaEventElapsedTime(&milliseconds, pipe->events.iter[2][ITER_COPY_CPU],
-                                        pipe->events.iter[2][ITER_DATA_WRITE]);
-    printf("Time elapsed (Data Write):                  %10.6f ms\n", (double)milliseconds);
+
+    /* Calculate pipe-wide statistics */
+    cudaEventElapsedTime(&ttfo,     pipe->events.pipestart,
+                                    pipe->events.pipe1stout);
+    cudaEventElapsedTime(&fote,     pipe->events.pipe1stout,
+                                    pipe->events.pipeend);
+    cudaEventElapsedTime(&pipetime, pipe->events.pipestart,
+                                    pipe->events.pipeend);
+
+
+    /**
+     * Find the oldest completed iteration in the ring buffer.
+     * Count the rest. Quit if fewer than three.
+     */
+
+    for(i=0; i<depth; i++){
+        if(cudaEventQuery(pipe->events.iter[i][ITER_START]) == cudaSuccess &&
+           cudaEventQuery(pipe->events.iter[i][ITER_END])   == cudaSuccess &&
+           cudaEventElapsedTime(&milliseconds,
+                          pipe->events.iter[i][ITER_START],
+                          pipe->events.iter[i][ITER_END])   == cudaSuccess &&
+           milliseconds >= 0){
+            if(!count++){
+                o = i;
+            }else{
+                cudaEventElapsedTime(&milliseconds, pipe->events.iter[o][ITER_END],
+                                                    pipe->events.iter[i][ITER_END]);
+                if(milliseconds < 0)
+                    o = i;
+            }
+        }
+    }
+
+    if(count < 3)
+        goto total;
+
+    s = (o+2+1*count/4) % depth; /* Ignore the first two iterations. */
+    e = (s+(count-1)/2) % depth;
+
+    for(i=s, n=0; i!=e; i=(i+1) % depth, n++){
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_START],
+                                            pipe->events.iter[i][ITER_DATA_READ]);
+        data_read  += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_READ],
+                                            pipe->events.iter[i][ITER_COPY_GPU]);
+        copy_gpu   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_GPU],
+                                            pipe->events.iter[i][ITER_GRIDDING]);
+        gridding   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_GRIDDING],
+                                            pipe->events.iter[i][ITER_FFT]);
+        fft        += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_FFT],
+                                            pipe->events.iter[i][ITER_INTERP]);
+        interp     += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_INTERP],
+                                            pipe->events.iter[i][ITER_TLISI]);
+        tlisi      += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_TLISI],
+                                            pipe->events.iter[i][ITER_COPY_CPU]);
+        copy_cpu   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_CPU],
+                                            pipe->events.iter[i][ITER_DATA_WRITE]);
+        data_write += milliseconds;
+
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_START],
+                                            pipe->events.iter[i][ITER_END]);
+        latency    += milliseconds;
+    }
+
+    printf("Average Time (Data Read):                   %10.6f ms\n",  data_read / n);
+    printf("Average Time (Copy GPU):                    %10.6f ms\n",   copy_gpu / n);
+    printf("Average Time (Gridding):                    %10.6f ms\n",   gridding / n);
+    printf("Average Time (FFT):                         %10.6f ms\n",        fft / n);
+    printf("Average Time (Interpolation):               %10.6f ms\n",     interp / n);
+    printf("Average Time (tLISI):                       %10.6f ms\n",      tlisi / n);
+    printf("Average Time (Copy GPU):                    %10.6f ms\n",   copy_cpu / n);
+    printf("Average Time (Data Write):                  %10.6f ms\n", data_write / n);
+    printf("\n");
+    printf("Average Latency (Sum of Above):             %10.6f ms\n",    latency / n);
+    printf("\n");
+    printf("Time To First Output (TTFO):                %10.6f ms\n", (double)ttfo);
+    printf("First Output To End  (FOTE):                %10.6f ms\n", (double)fote);
+    printf("\n");
+    total:
+    printf("TOTAL:                                      %10.6f ms\n", (double)pipetime);
 }
 
 static cudaError_t   fip_pipe_cuda_free_mem                  (fip_pipe_cuda_state*     pipe){
@@ -1342,6 +1418,9 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
         fip_pipe_cuda_unlock    (pipe, i, RING_RESULT_PIN, pipe->stream.data_write, 0);
         fip_pipe_cuda_record    (pipe, i, ITER_DATA_WRITE, pipe->stream.data_write, 0);
         fip_pipe_cuda_record    (pipe, i, ITER_END,        pipe->stream.data_write, 0);
+
+        if(i == snap_start+2)
+            fip_pipe_cuda_record(pipe, i, PIPE_1STOUT,     pipe->stream.data_write, 0);
     }
     fip_pipe_cuda_record (pipe, 0, LOOP_END, pipe->stream.data_write, 0);
 
@@ -1367,6 +1446,7 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
 
     fip_pipe_cuda_free_mem      (pipe);
     fip_pipe_cuda_record        (pipe, 0, PIPE_END, 0, 0);
+    cudaEventSynchronize        (pipe->events.pipeend);
     fip_pipe_cuda_dump_timings  (pipe);
     fip_pipe_cuda_destroy_events(pipe);
 
