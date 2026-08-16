@@ -26,6 +26,8 @@
 #define  END_OFFSET_FLAG         5
 #define  SNAP_COUNT_GE_3_FLAG    6
 #define  NUM_BASELINES_FLAG      7
+#define  DIMENSION_2D_FLAG       8
+#define  DIMENSION_3D_FLAG       9
 
 #define  NUM_BASELINES_FLAG_DEFAULT      -1
 #define  START_OFFSET_FLAG_DEFAULT       -1
@@ -569,6 +571,7 @@ int main_pipe(int argc, char* argv[]){
     long long snap_start      = START_OFFSET_FLAG_DEFAULT;
     long long snap_end        = END_OFFSET_FLAG_DEFAULT;
     long long snap_count      = SNAP_COUNT_FLAG_DEFAULT;
+    int       num_dimensions  = 2;
     float     cell_size       = 0.000020595;
     long long snap_count_file    = 0;
     long long num_baselines_file = 0;
@@ -599,6 +602,8 @@ int main_pipe(int argc, char* argv[]){
         {"help",          'h', POPT_ARG_NONE,     NULL,           HELP_FLAG,             "Print this help",            NULL},
         {"input",         'i', POPT_ARG_STRING,   &input_name,    0,                     "Input",                      "FILE"},
         {"output",        'o', POPT_ARG_STRING,   &output_name,   0,                     "Output",                     "FILE"},
+        {"2d",            '2', POPT_ARG_NONE,     NULL,           DIMENSION_2D_FLAG,     "2D coordinate selection",    NULL},
+        {"3d",            '3', POPT_ARG_NONE,     NULL,           DIMENSION_3D_FLAG,     "3D coordinate selection",    NULL},
         {"snap-count",    'N', POPT_ARG_LONGLONG, &snap_count,    SNAP_COUNT_GE_3_FLAG,  "Number of snapshots",        "N"},
         {"snap-start",    'S', POPT_ARG_LONGLONG, &snap_start,    START_OFFSET_FLAG,     "Starting snapshot# (incl.)", "N"},
         {"snap-end",      'E', POPT_ARG_LONGLONG, &snap_end,      END_OFFSET_FLAG,       "Ending snapshot#   (excl.)", "N"},
@@ -672,6 +677,10 @@ int main_pipe(int argc, char* argv[]){
                     goto poptfail;
                 }
                 break;
+            case DIMENSION_2D_FLAG:      /* --2d */
+            case DIMENSION_3D_FLAG:      /* --3d */
+                num_dimensions = rc == DIMENSION_2D_FLAG ? 2 : 3;
+                break;
             case VERBOSE_FLAG:           /* --verbose, -v */
                 if(verbose <= INT_MAX-10)
                     verbose += 10;
@@ -712,6 +721,15 @@ int main_pipe(int argc, char* argv[]){
         input_name  = fip_strdup("input.fits");
     if(!output_name)
         output_name = fip_strdup("output.fits");
+
+    /**
+     * We don't actually support 3D coordinate systems yet.
+     */
+
+    if(num_dimensions != 2){
+        fprintf(stderr, "Error: 3D coordinate processing not yet implemented!\n");
+        rc = EXIT_FAILURE;
+    }
 
     poptfail:
     poptFreeContext(parser);
