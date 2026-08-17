@@ -67,5 +67,10 @@ X. Li, K. Adámek, M. Giles, W. Armour, "[FIP-TOI: Fast Imaging Pipeline for Pul
 
 ## License
 
-This project is licensed under the BSD 3-Clause License. See `LICENSE` for the
-full license text.
+Shield: [![BSD 3-Clause][bsd-3-shield]][bsd-3]
+
+This work is licensed under a
+[BSD 3-Clause License][bsd-3].
+
+[bsd-3]: https://opensource.org/licenses/BSD-3-Clause
+[bsd-3-shield]: https://img.shields.io/badge/License-BSD_3--Clause-blue.svg
