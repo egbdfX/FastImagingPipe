@@ -63,25 +63,58 @@ typedef enum fip_pipe_cuda_ring fip_pipe_cuda_ring;
 
 enum fip_pipe_cuda_event{
     /* Pre-loop Events */
-    PIPE_START         = -2,
+    PIPE_START           = -2,
     LOOP_START,
 
     /* Loop Events */
-    ITER_START         =  0,   /* Loop iteration (i) start */
-    ITER_DATA_READ,            /* Data has been read into pinned input buffer */
-    ITER_COPY_GPU,             /* Data has been copied to GPU */
-    ITER_GRIDDING,             /* Gridding      complete */
-    ITER_FFT,                  /* FFT           complete */
-    ITER_INTERP,               /* Interpolation complete */
-    ITER_TLISI,                /* tLISI         executed */
-    ITER_COPY_CPU,             /* Data has been copied from GPU to pinned output buffer */
-    ITER_DATA_WRITE,           /* Data has been written out of pinned output buffer */
-    ITER_END,                  /* Loop iteration (i) end.
-                                  Not identical to ITER_DATA_WRITE for first 2 iterations. */
-    ITER_NUM_EVENTS,           /* Number of loop events being recorded. */
+    ITER_START           =  0,  /* Loop iteration (i) start */
+
+    ITER_DATA_READ_PREP  = ITER_START,
+                                /* Preparing to read data into pinned input buffer */
+    ITER_DATA_READ_READY,       /* Ready     to read data into pinned input buffer */
+    ITER_DATA_READ_DONE,        /* Data     has been read into pinned input buffer */
+
+    ITER_COPY_GPU_PREP   = ITER_DATA_READ_DONE,
+                                /* Preparing to copy data to GPU */
+    ITER_COPY_GPU_READY,        /* Ready     to copy data to GPU */
+    ITER_COPY_GPU_DONE,         /* Data   has been copied to GPU */
+
+    ITER_GRIDDING_PREP   = ITER_COPY_GPU_DONE,
+                                /* Preparing to grid data */
+    ITER_GRIDDING_READY,        /* Ready     to grid data */
+    ITER_GRIDDING_DONE,         /* Gridding      complete */
+
+    ITER_FFT_PREP        = ITER_GRIDDING_DONE,
+                                /* Preparing to FFT data */
+    ITER_FFT_READY,             /* Ready     to FFT data */
+    ITER_FFT_DONE,              /* FFT          complete */
+
+    ITER_INTERP_PREP     = ITER_FFT_DONE,
+                                /* Preparing to interpolate image */
+    ITER_INTERP_READY,          /* Ready     to interpolate image */
+    ITER_INTERP_DONE,           /* Interpolation         complete */
+
+    ITER_TLISI_PREP      = ITER_INTERP_DONE,
+                                /* Preparing to execute tLISI */
+    ITER_TLISI_READY,           /* Ready     to execute tLISI */
+    ITER_TLISI_DONE,            /* tLISI             executed */
+
+    ITER_COPY_CPU_PREP   = ITER_TLISI_DONE,
+                                /* Preparing to copy data from GPU to pinned output buffer */
+    ITER_COPY_CPU_READY,        /* Ready     to copy data from GPU to pinned output buffer */
+    ITER_COPY_CPU_DONE,         /* Data   has been copied from GPU to pinned output buffer */
+
+    ITER_DATA_WRITE_PREP = ITER_COPY_CPU_DONE,
+                                /* Preparing  to write out data from pinned output buffer */
+    ITER_DATA_WRITE_READY,      /* Ready      to write out data from pinned output buffer */
+    ITER_DATA_WRITE_DONE,       /* Data    has been written out from pinned output buffer */
+
+    ITER_END,                   /* Loop iteration (i) end.
+                                   Not identical to ITER_DATA_WRITE for first 2 iterations. */
+    ITER_NUM_EVENTS,            /* Number of loop events being recorded. */
 
     /* Special events */
-    PIPE_1STOUT,               /* First output from pipe (end of third iteration) */
+    PIPE_1STOUT,                /* First output from pipe (end of third iteration) */
 
     /* Post-loop Events */
     LOOP_END,
@@ -863,9 +896,15 @@ static cufftResult   fip_pipe_cuda_plan_fft                  (fip_pipe_cuda_stat
 
 static void          fip_pipe_cuda_dump_timings              (fip_pipe_cuda_state*     pipe){
     float  milliseconds=0, ttfo=0, fote=0, pipetime=0;
-    double data_read=0, copy_gpu=0, gridding=0, fft=0,
-           interp=0, tlisi=0, copy_cpu=0, data_write=0,
-           latency=0;
+    double latency         = 0;
+    double data_read_wait  = 0, data_read  = 0;
+    double copy_gpu_wait   = 0, copy_gpu   = 0;
+    double gridding_wait   = 0, gridding   = 0;
+    double fft_wait        = 0, fft        = 0;
+    double interp_wait     = 0, interp     = 0;
+    double tlisi_wait      = 0, tlisi      = 0;
+    double copy_cpu_wait   = 0, copy_cpu   = 0;
+    double data_write_wait = 0, data_write = 0;
     size_t count = 0, i=0, o=0, s=0, e=0, n=0;
     size_t depth = sizeof(pipe->events.iter)/sizeof(pipe->events.iter[0]);
 
@@ -913,52 +952,96 @@ static void          fip_pipe_cuda_dump_timings              (fip_pipe_cuda_stat
     e = (s+(count-1)/2) % depth;
 
     for(i=s, n=0; i!=e; i=(i+1) % depth, n++){
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_START],
-                                            pipe->events.iter[i][ITER_DATA_READ]);
-        data_read  += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_READ],
-                                            pipe->events.iter[i][ITER_COPY_GPU]);
-        copy_gpu   += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_GPU],
-                                            pipe->events.iter[i][ITER_GRIDDING]);
-        gridding   += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_GRIDDING],
-                                            pipe->events.iter[i][ITER_FFT]);
-        fft        += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_FFT],
-                                            pipe->events.iter[i][ITER_INTERP]);
-        interp     += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_INTERP],
-                                            pipe->events.iter[i][ITER_TLISI]);
-        tlisi      += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_TLISI],
-                                            pipe->events.iter[i][ITER_COPY_CPU]);
-        copy_cpu   += milliseconds;
-        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_CPU],
-                                            pipe->events.iter[i][ITER_DATA_WRITE]);
-        data_write += milliseconds;
+        /* Data read */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_READ_PREP],
+                                            pipe->events.iter[i][ITER_DATA_READ_READY]);
+        data_read_wait  += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_READ_READY],
+                                            pipe->events.iter[i][ITER_DATA_READ_DONE]);
+        data_read       += milliseconds;
 
+        /* Copy GPU */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_GPU_PREP],
+                                            pipe->events.iter[i][ITER_COPY_GPU_READY]);
+        copy_gpu_wait   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_GPU_READY],
+                                            pipe->events.iter[i][ITER_COPY_GPU_DONE]);
+        copy_gpu        += milliseconds;
+
+        /* Gridding */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_GRIDDING_PREP],
+                                            pipe->events.iter[i][ITER_GRIDDING_READY]);
+        gridding_wait   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_GRIDDING_READY],
+                                            pipe->events.iter[i][ITER_GRIDDING_DONE]);
+        gridding        += milliseconds;
+
+        /* FFT */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_FFT_PREP],
+                                            pipe->events.iter[i][ITER_FFT_READY]);
+        fft_wait        += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_FFT_READY],
+                                            pipe->events.iter[i][ITER_FFT_DONE]);
+        fft             += milliseconds;
+
+        /* Interpolation */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_INTERP_PREP],
+                                            pipe->events.iter[i][ITER_INTERP_READY]);
+        interp_wait     += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_INTERP_READY],
+                                            pipe->events.iter[i][ITER_INTERP_DONE]);
+        interp          += milliseconds;
+
+        /* tLISI */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_TLISI_PREP],
+                                            pipe->events.iter[i][ITER_TLISI_READY]);
+        tlisi_wait      += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_TLISI_READY],
+                                            pipe->events.iter[i][ITER_TLISI_DONE]);
+        tlisi           += milliseconds;
+
+        /* Copy CPU */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_CPU_PREP],
+                                            pipe->events.iter[i][ITER_COPY_CPU_READY]);
+        copy_cpu_wait   += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_COPY_CPU_READY],
+                                            pipe->events.iter[i][ITER_COPY_CPU_DONE]);
+        copy_cpu        += milliseconds;
+
+        /* Data Write */
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_WRITE_PREP],
+                                            pipe->events.iter[i][ITER_DATA_WRITE_READY]);
+        data_write_wait += milliseconds;
+        cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_DATA_WRITE_READY],
+                                            pipe->events.iter[i][ITER_DATA_WRITE_DONE]);
+        data_write      += milliseconds;
+
+
+        /* Whole iteration */
         cudaEventElapsedTime(&milliseconds, pipe->events.iter[i][ITER_START],
                                             pipe->events.iter[i][ITER_END]);
         latency    += milliseconds;
     }
 
-    printf("Average Time (Data Read):                   %10.6f ms\n",  data_read / n);
-    printf("Average Time (Copy GPU):                    %10.6f ms\n",   copy_gpu / n);
-    printf("Average Time (Gridding):                    %10.6f ms\n",   gridding / n);
-    printf("Average Time (FFT):                         %10.6f ms\n",        fft / n);
-    printf("Average Time (Interpolation):               %10.6f ms\n",     interp / n);
-    printf("Average Time (tLISI):                       %10.6f ms\n",      tlisi / n);
-    printf("Average Time (Copy GPU):                    %10.6f ms\n",   copy_cpu / n);
-    printf("Average Time (Data Write):                  %10.6f ms\n", data_write / n);
+    printf("                              %14s + %14s  U\n", "WAITING", "WORKING");
+    printf("Average Time (Data Read):     %14.6f + %14.6f ms\n",  data_read_wait/n,  data_read/n);
+    printf("Average Time (Copy GPU):      %14.6f + %14.6f ms\n",   copy_gpu_wait/n,   copy_gpu/n);
+    printf("Average Time (Gridding):      %14.6f + %14.6f ms\n",   gridding_wait/n,   gridding/n);
+    printf("Average Time (FFT):           %14.6f + %14.6f ms\n",        fft_wait/n,        fft/n);
+    printf("Average Time (Interpolation): %14.6f + %14.6f ms\n",     interp_wait/n,     interp/n);
+    printf("Average Time (tLISI):         %14.6f + %14.6f ms\n",      tlisi_wait/n,      tlisi/n);
+    printf("Average Time (Copy GPU):      %14.6f + %14.6f ms\n",   copy_cpu_wait/n,   copy_cpu/n);
+    printf("Average Time (Data Write):    %14.6f + %14.6f ms\n", data_write_wait/n, data_write/n);
     printf("\n");
-    printf("Average Latency (Sum of Above):             %10.6f ms\n",    latency / n);
+    printf("Average Snapshot Work:        %31.6f ms\n", (data_read+copy_gpu+gridding+fft+
+                                                         interp+tlisi+copy_cpu+data_write)/n);
+    printf("Average Snapshot Latency:     %31.6f ms\n",  latency / n);
     printf("\n");
-    printf("Time To First Output (TTFO):                %10.6f ms\n", (double)ttfo);
-    printf("First Output To End  (FOTE):                %10.6f ms\n", (double)fote);
+    printf("Time To First Output (TTFO):  %31.6f ms\n", (double)ttfo);
+    printf("First Output To End  (FOTE):  %31.6f ms\n", (double)fote);
     printf("\n");
     total:
-    printf("TOTAL:                                      %10.6f ms\n", (double)pipetime);
+    printf("TOTAL:                        %31.6f ms\n", (double)pipetime);
 }
 
 static cudaError_t   fip_pipe_cuda_free_mem                  (fip_pipe_cuda_state*     pipe){
@@ -1269,16 +1352,19 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
 
     for(i=snap_start; i<snap_end; i++){
         /* Stream data_read */
-        fip_pipe_cuda_record    (pipe, i, ITER_START,      pipe->stream.data_read, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_VIS_PIN,    pipe->stream.data_read, 0);
-        cudaLaunchHostFunc      (pipe->stream.data_read,   fip_pipe_cuda_stage_data_read, &pipe_state);
-        fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ,  pipe->stream.data_read, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_START,            pipe->stream.data_read, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_DATA_READ_PREP,   pipe->stream.data_read, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_VIS_PIN,          pipe->stream.data_read, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ_READY,  pipe->stream.data_read, 0);
+        cudaLaunchHostFunc      (pipe->stream.data_read,         fip_pipe_cuda_stage_data_read, &pipe_state);
+        fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ_DONE,   pipe->stream.data_read, 0);
 
 
         /* Stream copy_gpu */
-        fip_pipe_cuda_await     (pipe, i, ITER_DATA_READ,  pipe->stream.copy_gpu, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_VIS_GPU,    pipe->stream.copy_gpu, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_XFORM_GPU,  pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_COPY_GPU_PREP,    pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_VIS_GPU,          pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_XFORM_GPU,        pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_COPY_GPU_READY,   pipe->stream.copy_gpu, 0);
         cudaMemcpyAsync         (fip_pipe_cuda_calc_ring_transform_gpu   (pipe, i),
                                  fip_pipe_cuda_calc_ring_transform_pinned(pipe, i),
                                  3            *            3 * sizeof(float),
@@ -1294,13 +1380,14 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->param.num_baselines * 2 * sizeof(float),
                                  cudaMemcpyHostToDevice,
                                  pipe->stream.copy_gpu);
-        fip_pipe_cuda_unlock    (pipe, i, RING_VIS_PIN,    pipe->stream.copy_gpu, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_COPY_GPU,   pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_VIS_PIN,          pipe->stream.copy_gpu, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_COPY_GPU_DONE,    pipe->stream.copy_gpu, 0);
 
 
         /* Stream gridding */
-        fip_pipe_cuda_await     (pipe, i, ITER_COPY_GPU,   pipe->stream.gridding, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_GRID_GPU,   pipe->stream.gridding, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_GRIDDING_PREP,    pipe->stream.gridding, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_GRID_GPU,         pipe->stream.gridding, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_GRIDDING_READY,   pipe->stream.gridding, 0);
         cudaMemsetAsync         (fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i), 0,
                                  pipe->ring.stride.grid *
                                  pipe->param.grid_size  * sizeof(cufftComplex),
@@ -1316,22 +1403,24 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->param.grid_size,
                                  pipe->param.num_baselines,
                                  pipe->param.cell_size * pipe->param.grid_size);
-        fip_pipe_cuda_unlock    (pipe, i, RING_VIS_GPU,    pipe->stream.gridding, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_GRIDDING,   pipe->stream.gridding, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_VIS_GPU,          pipe->stream.gridding, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_GRIDDING_DONE,    pipe->stream.gridding, 0);
 
 
         /* Stream fft */
-        fip_pipe_cuda_await     (pipe, i, ITER_GRIDDING,   pipe->stream.fft, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_FFT_PREP,         pipe->stream.fft, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_FFT_READY,        pipe->stream.fft, 0);
         cufftExecC2C            (cufft_plan,
                                  fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
                                  fip_pipe_cuda_calc_ring_grid_gpu        (pipe, i),
                                  CUFFT_INVERSE);
-        fip_pipe_cuda_record    (pipe, i, ITER_FFT,        pipe->stream.fft, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_FFT_DONE,         pipe->stream.fft, 0);
 
 
         /* Stream interpolation */
-        fip_pipe_cuda_await     (pipe, i, ITER_FFT,        pipe->stream.interpolation, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_IMAGE_GPU,  pipe->stream.interpolation, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_INTERP_PREP,      pipe->stream.interpolation, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_IMAGE_GPU,        pipe->stream.interpolation, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_INTERP_READY,     pipe->stream.interpolation, 0);
         cudaMemsetAsync         (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i), 0,
                                  pipe->ring.stride.image *
                                  pipe->param.image_size  * sizeof(float),
@@ -1350,15 +1439,15 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->wrkspc.conv_corr_kernel,
                                  conv_corr_norm_factor,
                                  inv_num_baselines);
-        fip_pipe_cuda_unlock    (pipe, i, RING_XFORM_GPU,  pipe->stream.interpolation, 0);
-        fip_pipe_cuda_unlock    (pipe, i, RING_GRID_GPU,   pipe->stream.interpolation, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_XFORM_GPU,        pipe->stream.interpolation, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_GRID_GPU,         pipe->stream.interpolation, 0);
         nppiMax_32f_C1R_Ctx     (fip_pipe_cuda_calc_ring_image_gpu       (pipe, i),
                                  pipe->ring.stride.image * sizeof(float),
                                  npp_image_size,
                                  (Npp8u*)pipe->wrkspc.npp.ptr,
                                  fip_pipe_cuda_calc_ring_max_gpu         (pipe, i),
                                  npp_ctx);
-        fip_pipe_cuda_record    (pipe, i, ITER_INTERP,     pipe->stream.interpolation, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_INTERP_DONE,      pipe->stream.interpolation, 0);
 
 
         /**
@@ -1368,14 +1457,15 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
          */
 
         if(i < snap_start+2){
-            fip_pipe_cuda_record(pipe, i, ITER_END,        pipe->stream.interpolation, 0);
+            fip_pipe_cuda_record(pipe, i, ITER_END,              pipe->stream.interpolation, 0);
             continue;
         }
 
 
         /* Stream tlisi */
-        fip_pipe_cuda_await     (pipe, i, ITER_INTERP,     pipe->stream.tlisi, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_RESULT_GPU, pipe->stream.tlisi, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_TLISI_PREP,       pipe->stream.tlisi, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_RESULT_GPU,       pipe->stream.tlisi, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_TLISI_READY,      pipe->stream.tlisi, 0);
         fip_cuda_kernel_tlisi   (pipe->launch.Bt,
                                  pipe->launch.Tt,
                                  pipe->launch.St,
@@ -1393,13 +1483,14 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->param.unit_size,
                                  pipe->param.unit_num,
                                  C);
-        fip_pipe_cuda_unlock    (pipe,i-2,RING_IMAGE_GPU,  pipe->stream.tlisi, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_TLISI,      pipe->stream.tlisi, 0);
+        fip_pipe_cuda_unlock    (pipe,i-2,RING_IMAGE_GPU,        pipe->stream.tlisi, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_TLISI_DONE,       pipe->stream.tlisi, 0);
 
 
         /* Stream copy_cpu */
-        fip_pipe_cuda_await     (pipe, i, ITER_TLISI,      pipe->stream.copy_cpu, 0);
-        fip_pipe_cuda_lock      (pipe, i, RING_RESULT_PIN, pipe->stream.copy_cpu, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_COPY_CPU_PREP,    pipe->stream.copy_cpu, 0);
+        fip_pipe_cuda_lock      (pipe, i, RING_RESULT_PIN,       pipe->stream.copy_cpu, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_COPY_CPU_READY,   pipe->stream.copy_cpu, 0);
         cudaMemcpy2DAsync       (fip_pipe_cuda_calc_ring_result_pinned   (pipe, i),
                                  pipe->param.unit_num     * sizeof(float),
                                  fip_pipe_cuda_calc_ring_result_gpu      (pipe, i),
@@ -1408,19 +1499,22 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->param.unit_num,
                                  cudaMemcpyDeviceToHost,
                                  pipe->stream.copy_cpu);
-        fip_pipe_cuda_unlock    (pipe, i, RING_RESULT_GPU, pipe->stream.copy_cpu, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_COPY_CPU,   pipe->stream.copy_cpu, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_RESULT_GPU,       pipe->stream.copy_cpu, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_COPY_CPU_DONE,    pipe->stream.copy_cpu, 0);
 
 
         /* Stream data_write */
-        fip_pipe_cuda_await     (pipe, i, ITER_COPY_CPU,   pipe->stream.data_write, 0);
+        fip_pipe_cuda_await     (pipe, i, ITER_DATA_WRITE_PREP,  pipe->stream.data_write, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_DATA_WRITE_READY, pipe->stream.data_write, 0);
         cudaLaunchHostFunc      (pipe->stream.data_write,  fip_pipe_cuda_stage_data_write, &pipe_state);
-        fip_pipe_cuda_unlock    (pipe, i, RING_RESULT_PIN, pipe->stream.data_write, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_DATA_WRITE, pipe->stream.data_write, 0);
-        fip_pipe_cuda_record    (pipe, i, ITER_END,        pipe->stream.data_write, 0);
+        fip_pipe_cuda_unlock    (pipe, i, RING_RESULT_PIN,       pipe->stream.data_write, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_DATA_WRITE_DONE,  pipe->stream.data_write, 0);
+        fip_pipe_cuda_record    (pipe, i, ITER_END,              pipe->stream.data_write, 0);
 
+
+        /* Record Time-to-First-Output */
         if(i == snap_start+2)
-            fip_pipe_cuda_record(pipe, i, PIPE_1STOUT,     pipe->stream.data_write, 0);
+            fip_pipe_cuda_record(pipe, i, PIPE_1STOUT,           pipe->stream.data_write, 0);
     }
     fip_pipe_cuda_record (pipe, 0, LOOP_END, pipe->stream.data_write, 0);
 
