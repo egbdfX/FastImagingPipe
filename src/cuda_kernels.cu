@@ -455,7 +455,8 @@ __global__ static void tlisi   (float*           result,
                                 const size_t     image_size,
                                 const size_t     unit_size,
                                 const size_t     unit_num,
-                                const float      C){
+                                const float      C,
+                                const int        big_endian){
     extern  __shared__  float sharedNumDen[];
 
     const float  maxallval = fmaxf(*max0, fmaxf(*max1, *max2));
@@ -512,10 +513,16 @@ __global__ static void tlisi   (float*           result,
     }
 
     if(tid==0){
-        result[i_id*result_stride + j_id] =
-            1 - (sharedNumDen[0   ]/unit_size/unit_size) *
-                 sharedNumDen[1024]                      *
-                (sharedNumDen[2048]/unit_size/unit_size) / maxallval / maxallval;
+        float    r = 1 - (sharedNumDen[0   ]/unit_size/unit_size) *
+                          sharedNumDen[1024]                      *
+                         (sharedNumDen[2048]/unit_size/unit_size) / maxallval / maxallval;
+        if(big_endian){
+            unsigned u = 0;
+            memcpy(&u, &r, sizeof(u));
+            u = __byte_perm (u, 0, 0x0123);
+            memcpy(&r, &u, sizeof(r));
+        }
+        result[i_id*result_stride + j_id] = r;
     }
 }
 
@@ -623,7 +630,8 @@ void fip_cuda_kernel_tlisi         (dim3                cuda_grid,
                                     const size_t        image_size,
                                     const size_t        unit_size,
                                     const size_t        unit_num,
-                                    const float         C){
+                                    const float         C,
+                                    const int           big_endian){
     tlisi<<<cuda_grid,
             cuda_thrd,
             cuda_shmem,
@@ -640,6 +648,7 @@ void fip_cuda_kernel_tlisi         (dim3                cuda_grid,
         image_size,
         unit_size,
         unit_num,
-        C
+        C,
+        big_endian
     );
 }

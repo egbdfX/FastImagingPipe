@@ -73,7 +73,8 @@ void fip_cuda_kernel_tlisi         (dim3                cuda_grid,
                                     const size_t        image_size,
                                     const size_t        unit_size,
                                     const size_t        unit_num,
-                                    const float         C);
+                                    const float         C,
+                                    const int           big_endian);
 
 
 /* End Extern "C" and Include Guard */

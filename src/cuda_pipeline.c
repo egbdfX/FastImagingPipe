@@ -138,6 +138,7 @@ struct fip_pipe_cuda_state{
         size_t grid_size;
         size_t unit_size;
         size_t unit_num;
+        int    big_endian;
     } param;
 
 
@@ -398,6 +399,7 @@ int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_stat
     pipe->param.cell_size     = cell_size;
     pipe->param.unit_size     = unit_size;
     pipe->param.unit_num      = unit_num;
+    pipe->param.big_endian    = 0;
 
     return 0;
 }
@@ -1482,7 +1484,8 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  pipe->param.image_size,
                                  pipe->param.unit_size,
                                  pipe->param.unit_num,
-                                 C);
+                                 C,
+                                 pipe->param.big_endian);
         fip_pipe_cuda_unlock    (pipe,i-2,RING_IMAGE_GPU,        pipe->stream.tlisi, 0);
         fip_pipe_cuda_record    (pipe, i, ITER_TLISI_DONE,       pipe->stream.tlisi, 0);
 
