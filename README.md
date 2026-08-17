@@ -1,8 +1,22 @@
 # Fast Imaging Pipeline
 
-We develop a GPU-accelerated Fast Imaging (FI) Pipeline for transient detection in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FI pipeline consists of two components: SVD imager (see [SVD Imager](https://github.com/egbdfX/SVDimager)) and FI trigger (see [Fast Imaging Trigger](https://github.com/egbdfX/FastImagingTrigger)).
+We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FI pipeline consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)).
+
+There are two executable stages:
+
+1. `svd_preprocess_gpu`: reads CASA Measurement Sets and writes inputs for the imager in FITS files (solely as data containers rather than image files).
+2. `sharedlibrary_gpu`: reads the FITS inputs, runs the CUDA imaging and tLISI
+   kernels, and writes the final tLISI matrix into a FITS file.
+
+The older Python preprocessing script, `SVD_MFS.py`, is still included as a
+reference implementation. The maintained preprocessing path is the GPU/C++
+implementation in `SVDPreprocessMain.cpp` and `SVDPreprocessKernels.cu`.
 
 ## User guidance
+
+
+
+
 
 **Step 0:** Pre-processing
 
@@ -53,13 +67,5 @@ X. Li, K. Adámek, M. Giles, W. Armour, "[FIP-TOI: Fast Imaging Pipeline for Pul
 
 ## License
 
-Shield: [![CC BY 4.0][cc-by-shield]][cc-by]
-
-This work is licensed under a
-[Creative Commons Attribution 4.0 International License][cc-by].
-
-[![CC BY 4.0][cc-by-image]][cc-by]
-
-[cc-by]: http://creativecommons.org/licenses/by/4.0/
-[cc-by-image]: https://i.creativecommons.org/l/by/4.0/88x31.png
-[cc-by-shield]: https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg
+This project is licensed under the BSD 3-Clause License. See `LICENSE` for the
+full license text.
