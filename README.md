@@ -72,7 +72,7 @@ Options:
 
 Outputs:
 
-`PREFIXBin.fits` contains centred 2D baseline coordinates, shape `2 x total_samples`; `PREFIXVin.fits` includes per-snapshot 3 x 3 transformation matrices; `PREFIXVisreal.fits` contains weighted real visibility values; `PREFIXVisimag.fits` includes weighted imaginary visibility values; combined FITS file with extensions `TRANSFORMATION MATRICES`, `VISIBILITIES`, and `R-COORDINATES`.
+`PREFIXBin.fits` contains centred 2D baseline coordinates, shape `2 x total_samples`; `PREFIXVin.fits` flattened per-snapshot 3 x 3 transformation matrices, stored as a 2D FITS image with shape `3 x (3 * Number_of_Snapshots)`; `PREFIXVisreal.fits` contains weighted real visibility values; `PREFIXVisimag.fits` includes weighted imaginary visibility values; combined FITS file with extensions `TRANSFORMATION MATRICES`, `VISIBILITIES`, and `R-COORDINATES`.
 
 If snapshots have different sample counts, the preprocessor zero-pads shorter snapshots to the maximum snapshot size before writing aggregate outputs.
 
@@ -84,7 +84,7 @@ Run `sharedlibrary_gpu` with the separate FITS files generated above:
 ./sharedlibrary_gpu Visreal.fits Visimag.fits Bin.fits Vin.fits Image_Size Number_of_Baselines Cell_Size Number_of_Snapshots Tile_Size Output_Name.fits
 ```
 
-Here, ```Visreal_input.fits```, ```Visimag_input.fits```, ```B_input.fits```, and ```V_input.fits``` are the input files (in FITS format) corresponding to the real components of visibilities, the imaginary components of visibilities, the (centred) SVDed baseline matrix, and the V matrix in the SVD, respectively. The remaining arguments are as their names suggest, where ```Image_Size``` is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), ```Number_of_Baselines``` is an integer, ```Cell_Size``` is in units of radians, ```Number_of_Snapshots``` is an integer, ```Tile_Size``` is an integer (e.g., if you input 20, it means the tile size is $20 \times 20$ pixels), and the last argument is the name of the output file which should end with '.fits'. The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output tLISI matrix.
+Here, ```Visreal.fits```, ```Visimag.fits```, ```Bin.fits```, and ```Vin.fits``` are the input files (in FITS format) corresponding to the real components of visibilities, the imaginary components of visibilities, the (centred) SVDed baseline matrix, and the V matrix in the SVD, respectively. The remaining arguments are as their names suggest, where ```Image_Size``` is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), ```Number_of_Baselines``` is an integer for rows $\times$ channels, ```Cell_Size``` is in units of radians, ```Number_of_Snapshots``` is an integer, ```Tile_Size``` is an integer (e.g., if you input 20, it means the tile size is $20 \times 20$ pixels), and the last argument is the name of the output file which should end with '.fits'. The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output tLISI matrix.
 
 ## Contact
 If you have any questions or need further assistance, please feel free to contact at [egbdfmusic1@gmail.com](mailto:egbdfmusic1@gmail.com).
