@@ -124,7 +124,7 @@ extern "C" int main_image(int argc, char* argv[]){
         if(fits_status) goto fitsfail;
     }
 
-    state = fip_pipe_iter_state(input, output).skip((size_t)snapshot);
+    state.reset(input, output).seek((size_t)snapshot);
 
     if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto fitsfail;
