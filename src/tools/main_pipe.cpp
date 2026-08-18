@@ -55,11 +55,20 @@ struct fip_pipe_iter_state{
             reset_iterator();
     }
 
+    fip_pipe_iter_state& reset(Table new_input, fitsfile* new_output){
+        input = new_input;
+        output = new_output;
+        output_status = 0;
+        return reset_iterator();
+    }
+
     fip_pipe_iter_state& reset_iterator(void){
         iter = TableIterator(input, "TIME", TableIterator::Ascending,
-                                            TableIterator::QuickSort);
+                                              TableIterator::QuickSort);
         input_iteration = 0;
+        array_center = 0;
         has_old_transform = 0;
+
         chan_freq       = ROArrayColumn<Double>(input.keywordSet()
                                                      .asTable("SPECTRAL_WINDOW"),
                                                 "CHAN_FREQ").getColumn();
@@ -84,6 +93,12 @@ struct fip_pipe_iter_state{
         return *this;
     }
 
+    fip_pipe_iter_state& seek(size_t target){
+        if(target < input_iteration)
+            reset_iterator();
+        return skip(target - input_iteration);
+    }
+
     void next(void*    userdata,
               Complex* visibilities,
               Float*   coordinates,
@@ -91,7 +106,7 @@ struct fip_pipe_iter_state{
               size_t   num_baselines,
               size_t   iteration){
         (void)userdata;
-        (void)iteration;
+        seek(iteration);
 
 
         /**
@@ -99,6 +114,7 @@ struct fip_pipe_iter_state{
          */
 
         Table  snapshot = iter.table(); iter.next();
+        input_iteration++;
         size_t num_rows = (size_t)snapshot.nrow();
         const bool has_weight_spectrum = snapshot.tableDesc().isColumn("WEIGHT_SPECTRUM");
 
@@ -969,7 +985,7 @@ int main_pipe(int argc, char* argv[]){
 
 
     /* Execute Pipeline */
-    state = fip_pipe_iter_state(subset, output).skip(snap_start_final);
+    state.reset(subset, output).seek(snap_start_final);
     if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto cudafail;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, NULL, &state, NULL,
