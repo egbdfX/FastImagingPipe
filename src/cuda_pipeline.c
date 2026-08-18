@@ -1300,27 +1300,6 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
     for(i=snap_start; i<snap_end; i++){
         /* Stream data_read */
         fip_pipe_cuda_record    (pipe, i, ITER_START,      pipe->stream.data_read, 0);
-        if(image_only){
-            fip_pipe_cuda_await(pipe, i, ITER_INTERP, pipe->stream.copy_cpu, 0);
-            cudaMemcpy2DAsync(fip_pipe_cuda_calc_ring_image_pinned(pipe, i),
-                              pipe->param.image_size * sizeof(float),
-                              fip_pipe_cuda_calc_ring_image_gpu(pipe, i),
-                              pipe->ring.stride.image * sizeof(float),
-                              pipe->param.image_size * sizeof(float),
-                              pipe->param.image_size,
-                              cudaMemcpyDeviceToHost,
-                               pipe->stream.copy_cpu);
-            fip_pipe_cuda_record(pipe, i, ITER_COPY_CPU, pipe->stream.copy_cpu, 0);
-
-            fip_pipe_cuda_await(pipe, i, ITER_COPY_CPU, pipe->stream.data_write, 0);
-            cudaLaunchHostFunc(pipe->stream.data_write, fip_pipe_cuda_stage_image_write, &pipe_state);
-            fip_pipe_cuda_unlock(pipe, i, RING_IMAGE_GPU, pipe->stream.data_write, 0);
-            fip_pipe_cuda_record(pipe, i, ITER_DATA_WRITE, pipe->stream.data_write, 0);
-            fip_pipe_cuda_record(pipe, i, ITER_END, pipe->stream.data_write, 0);
-            if(i == snap_start)
-                fip_pipe_cuda_record(pipe, i, PIPE_1STOUT, pipe->stream.data_write, 0);
-            continue;
-        }
         fip_pipe_cuda_lock      (pipe, i, RING_VIS_PIN,    pipe->stream.data_read, 0);
         cudaLaunchHostFunc      (pipe->stream.data_read,   fip_pipe_cuda_stage_data_read, &pipe_state);
         fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ,  pipe->stream.data_read, 0);
@@ -1410,7 +1389,27 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
                                  fip_pipe_cuda_calc_ring_max_gpu         (pipe, i),
                                  npp_ctx);
         fip_pipe_cuda_record    (pipe, i, ITER_INTERP,     pipe->stream.interpolation, 0);
+        if(image_only){
+            fip_pipe_cuda_await(pipe, i, ITER_INTERP, pipe->stream.copy_cpu, 0);
+            cudaMemcpy2DAsync(fip_pipe_cuda_calc_ring_image_pinned(pipe, i),
+                              pipe->param.image_size * sizeof(float),
+                              fip_pipe_cuda_calc_ring_image_gpu(pipe, i),
+                              pipe->ring.stride.image * sizeof(float),
+                              pipe->param.image_size * sizeof(float),
+                              pipe->param.image_size,
+                              cudaMemcpyDeviceToHost,
+                               pipe->stream.copy_cpu);
+            fip_pipe_cuda_record(pipe, i, ITER_COPY_CPU, pipe->stream.copy_cpu, 0);
 
+            fip_pipe_cuda_await(pipe, i, ITER_COPY_CPU, pipe->stream.data_write, 0);
+            cudaLaunchHostFunc(pipe->stream.data_write, fip_pipe_cuda_stage_image_write, &pipe_state);
+            fip_pipe_cuda_unlock(pipe, i, RING_IMAGE_GPU, pipe->stream.data_write, 0);
+            fip_pipe_cuda_record(pipe, i, ITER_DATA_WRITE, pipe->stream.data_write, 0);
+            fip_pipe_cuda_record(pipe, i, ITER_END, pipe->stream.data_write, 0);
+            if(i == snap_start)
+                fip_pipe_cuda_record(pipe, i, PIPE_1STOUT, pipe->stream.data_write, 0);
+            continue;
+        }
 
         /**
          * Decision point:
