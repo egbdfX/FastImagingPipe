@@ -972,8 +972,8 @@ int main_pipe(int argc, char* argv[]){
     state = fip_pipe_iter_state(subset, output).skip(snap_start_final);
     if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
         goto cudafail;
-    rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
-                             snap_start_final, snap_end_final);
+    rc = fip_pipe_cuda(pipe, input_cb, output_cb, NULL, &state, NULL,
+                           snap_start_final, snap_end_final, 0);
     fip_pipe_cuda_clear(&pipe);
     fits_flush_file(output, &fits_status);
 
