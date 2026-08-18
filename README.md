@@ -5,12 +5,9 @@ We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection
 There are two executable stages:
 
 1. `svd_preprocess_gpu`: reads CASA Measurement Sets and writes inputs for the imager in FITS files (solely as data containers rather than image files).
-2. `sharedlibrary_gpu`: reads the FITS inputs, runs the CUDA imaging and tLISI
-   kernels, and writes the final tLISI matrix into a FITS file.
+2. `sharedlibrary_gpu`: reads the FITS inputs, runs the CUDA imaging and tLISI kernels, and writes the final tLISI matrix into a FITS file.
 
-The older Python preprocessing script, `SVD_MFS.py`, is still included as a
-reference implementation. The maintained preprocessing path is the GPU/C++
-implementation in `SVDPreprocessMain.cpp` and `SVDPreprocessKernels.cu`.
+The older Python preprocessing script, `SVD_MFS.py`, is still included as a reference implementation. The maintained preprocessing path is the GPU/C++ implementation in `SVDPreprocessMain.cpp` and `SVDPreprocessKernels.cu`.
 
 ## Dependencies
 
@@ -69,9 +66,9 @@ To treat each distinct Measurement Set `TIME` value as a separate snapshot:
 Options:
 
 - `--output-prefix PREFIX`: prefix for the separate FITS outputs. If omitted, outputs are written as `Bin.fits`, `Vin.fits`, `Visreal.fits`, and `Visimag.fits`.
-- `--combined-output FILE`: write a combined multi-extension FITS file. If omitted, this is `PREFIXinput.fits`.
+- `--combined-output FILE`: write a combined multi-extension FITS file. If omitted, this is `PREFIXinput.fits`. This is not used in the archive branch.
 - `--group-by-time`: group rows in each Measurement Set by `TIME`; each group becomes one snapshot.
-- `--snapshot-workers N`: number of snapshot workers. If omitted, the code uses up to 4 workers, limited by hardware concurrency and snapshot count.
+- `--snapshot-workers N`: number of snapshot workers, controlling how many snapshots are preprocessed concurrently. If omitted, the code uses up to 4 workers, limited by hardware concurrency and snapshot count.
 
 Outputs:
 
