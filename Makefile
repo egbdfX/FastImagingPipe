@@ -1,4 +1,5 @@
 CUDA_HOME ?= /usr/local/cuda
+CUDA_ARCH ?= 90
 
 CFITSIO_HOME := $(HOME)/Libraries/cfitsio
 
@@ -10,7 +11,7 @@ GCC := g++
 NVCC := $(CUDA_HOME)/bin/nvcc
 
 GCC_OPTS :=-O3 -fPIC -Wall -Wextra $(INC) -std=c++11
-NVCCFLAGS :=-O3 -gencode arch=compute_90,code=sm_90 --ptxas-options=-v -Xcompiler -fPIC -Xcompiler -Wextra -lineinfo $(INC) --use_fast_math
+NVCCFLAGS :=-O3 -gencode arch=compute_$(CUDA_ARCH),code=sm_$(CUDA_ARCH) --ptxas-options=-v -Xcompiler -fPIC -Xcompiler -Wextra -lineinfo $(INC) --use_fast_math
 
 all: clean sharedlibrary_gpu
 
