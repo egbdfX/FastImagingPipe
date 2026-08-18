@@ -1,6 +1,6 @@
 # Fast Imaging Pipeline
 
-We have developed a GPU-accelerated Fast Imaging (FI) Pipeline for transient detection in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FI pipeline consists of two components: Transient-Oriented Imager (TOI, see [SVD Imager](https://github.com/egbdfX/SVDimager)) and FITrig (see [Fast Imaging Trigger](https://github.com/egbdfX/FastImagingTrigger)).
+We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FIP consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)).
 
 ## User guidance
 
