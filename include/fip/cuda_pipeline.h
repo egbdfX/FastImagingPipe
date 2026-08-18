@@ -38,6 +38,11 @@ typedef void (*fip_pipe_cuda_output_cb)(void*  userdata0,
                                         void*  result,
                                         size_t unit_num,
                                         size_t iter);
+typedef void (*fip_pipe_cuda_image_cb) (void*  userdata0,
+                                        void*  userdata1,
+                                        void*  image,
+                                        size_t image_size,
+                                        size_t iter);
 
 
 
@@ -58,10 +63,12 @@ LIBFIP_PUBLIC
 int  fip_pipe_cuda      (fip_pipe_cuda_state*     pipe,
                          fip_pipe_cuda_input_cb   callback_input,
                          fip_pipe_cuda_output_cb  callback_output,
+                         fip_pipe_cuda_image_cb   callback_image,
                          void*                    userdata0,
                          void*                    userdata1,
                          const size_t             snap_start,
-                         const size_t             snap_end);
+                         const size_t             snap_end,
+                         const int                image_only);
 
 LIBFIP_PUBLIC
 void fip_pipe_cuda_free (fip_pipe_cuda_state*     pipe);
