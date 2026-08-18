@@ -77,8 +77,8 @@ extern "C" int main_image(int argc, char* argv[]){
     }
     poptFreeContext(parser);
 
-    if(!input_name) input_name = fip_strdup("input.ms");
-    if(!output_name) output_name = fip_strdup("image.fits");
+    input_name = fip_strdup(input_name ? input_name : "input.ms");
+    output_name = fip_strdup(output_name ? output_name : "image.fits");
 
     if(!Table::isReadable(input_name)){
         fprintf(stderr, "Error: %s is not readable!\n", input_name);
