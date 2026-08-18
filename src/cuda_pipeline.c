@@ -305,6 +305,7 @@ struct fip_pipe_cuda_state{
         void*       transform_gpu;
         void*       grid_gpu;
         void*       image_gpu;
+        void*       image_pinned;
         void*       max_gpu;
         void*       result_gpu;
         void*       result_pinned;
@@ -975,6 +976,7 @@ static cudaError_t   fip_pipe_cuda_free_mem                  (fip_pipe_cuda_stat
 
     cudaFreeHost(pipe->ring.vis_bin_pinned);
     cudaFreeHost(pipe->ring.transform_pinned);
+    cudaFreeHost(pipe->ring.image_pinned);
     cudaFreeHost(pipe->ring.result_pinned);
 
     return cudaSuccess;
@@ -1029,6 +1031,7 @@ static cudaError_t   fip_pipe_cuda_alloc_mem                 (fip_pipe_cuda_stat
 
     cudaMallocHost (&pipe->ring.vis_bin_pinned,         pipe->ring.depth.vis_bin * num_baselines * (2+2) * sizeof(float));
     cudaMallocHost (&pipe->ring.transform_pinned,       pipe->ring.depth.vis_bin *        3  *         3 * sizeof(float));
+    cudaMallocHost (&pipe->ring.image_pinned,           pipe->ring.depth.image   * image_size*image_size * sizeof(float));
     cudaMallocHost (&pipe->ring.result_pinned,          pipe->ring.depth.result  * unit_num  *  unit_num * sizeof(float));
 
     if((cudaError = cudaGetLastError())){
@@ -1096,6 +1099,12 @@ static float*        fip_pipe_cuda_calc_ring_image_gpu       (fip_pipe_cuda_stat
                    pipe->ring.stride.image * i;
 }
 
+static float* fip_pipe_cuda_calc_ring_image_pinned(fip_pipe_cuda_state* pipe, size_t i){
+    i %= pipe->ring.depth.image;
+    return (float*)pipe->ring.image_pinned +
+           pipe->param.image_size * pipe->param.image_size * i;
+}
+
 static float*        fip_pipe_cuda_calc_ring_result_gpu      (fip_pipe_cuda_state*     pipe, size_t i){
     i %= pipe->ring.depth.result;
     return (float*)pipe->ring.result_gpu    +
@@ -1117,8 +1126,10 @@ typedef struct{
     void*                   userdata1;
     fip_pipe_cuda_input_cb  input_cb;
     fip_pipe_cuda_output_cb output_cb;
+    fip_pipe_cuda_image_cb  image_cb;
     size_t                  input_iter;
     size_t                  output_iter;
+    size_t                  image_iter;
 } fipe_pipe_cuda_callback_state;
 
 static void          fip_pipe_cuda_stage_data_read           (void* const p){
@@ -1151,6 +1162,20 @@ static void          fip_pipe_cuda_stage_data_write          (void* const p){
     state->output_iter++;
 }
 
+static void fip_pipe_cuda_stage_image_write(void* const p){
+    fipe_pipe_cuda_callback_state* state = (fipe_pipe_cuda_callback_state*)p;
+    fip_pipe_cuda_state* pipe = state->pipe;
+    size_t i = state->image_iter;
+
+    state->image_cb(state->userdata0,
+                    state->userdata1,
+                    fip_pipe_cuda_calc_ring_image_pinned(pipe, i),
+                    pipe->param.image_size,
+                    i);
+
+    state->image_iter++;
+}
+
 int                  fip_pipe_cuda                           (fip_pipe_cuda_state*     pipe,
                                                               fip_pipe_cuda_input_cb   callback_input,
                                                               fip_pipe_cuda_output_cb  callback_output,
@@ -1177,8 +1202,10 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
         userdata1,
         callback_input,
         callback_output,
+        callback_image,
         snap_start,
         snap_start+2,
+        snap_start,
     };
 
 
@@ -1270,6 +1297,27 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
     for(i=snap_start; i<snap_end; i++){
         /* Stream data_read */
         fip_pipe_cuda_record    (pipe, i, ITER_START,      pipe->stream.data_read, 0);
+        if(image_only){
+            fip_pipe_cuda_await(pipe, i, ITER_INTERP, pipe->stream.copy_cpu, 0);
+            cudaMemcpy2DAsync(fip_pipe_cuda_calc_ring_image_pinned(pipe, i),
+                              pipe->param.image_size * sizeof(float),
+                              fip_pipe_cuda_calc_ring_image_gpu(pipe, i),
+                              pipe->ring.stride.image * sizeof(float),
+                              pipe->param.image_size * sizeof(float),
+                              pipe->param.image_size,
+                              cudaMemcpyDeviceToHost,
+                               pipe->stream.copy_cpu);
+            fip_pipe_cuda_record(pipe, i, ITER_COPY_CPU, pipe->stream.copy_cpu, 0);
+
+            fip_pipe_cuda_await(pipe, i, ITER_COPY_CPU, pipe->stream.data_write, 0);
+            cudaLaunchHostFunc(pipe->stream.data_write, fip_pipe_cuda_stage_image_write, &pipe_state);
+            fip_pipe_cuda_unlock(pipe, i, RING_IMAGE_GPU, pipe->stream.data_write, 0);
+            fip_pipe_cuda_record(pipe, i, ITER_DATA_WRITE, pipe->stream.data_write, 0);
+            fip_pipe_cuda_record(pipe, i, ITER_END, pipe->stream.data_write, 0);
+            if(i == snap_start)
+                fip_pipe_cuda_record(pipe, i, PIPE_1STOUT, pipe->stream.data_write, 0);
+            continue;
+        }
         fip_pipe_cuda_lock      (pipe, i, RING_VIS_PIN,    pipe->stream.data_read, 0);
         cudaLaunchHostFunc      (pipe->stream.data_read,   fip_pipe_cuda_stage_data_read, &pipe_state);
         fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ,  pipe->stream.data_read, 0);
