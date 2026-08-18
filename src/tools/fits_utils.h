@@ -18,28 +18,45 @@ extern "C" {
 
 
 /* Function Prototypes */
-int    fip_input_open_diskfile   (fitsfile**  fptr,
-                                  const char* filename,
-                                  int         iomode,
-                                  int*        status);
+ssize_t fip_pwrite_fully            (int         fd,
+                                     const void* buf,
+                                     size_t      len,
+                                     off_t       off);
 
-int    fip_input_get_stats       (fitsfile*   fptr,
-                                  long long*  num_snapshots,
-                                  long long*  num_baselines,
-                                  int*        status);
+int     fip_input_open_diskfile     (fitsfile**  fptr,
+                                     const char* filename,
+                                     int         iomode,
+                                     int*        status);
 
-int    fip_output_open_diskfile  (fitsfile**  fptr,
-                                  const char* filename,
-                                  int         iomode,
-                                  long long   snap_count,
-                                  long long   unit_num,
-                                  int*        status);
+int     fip_input_get_stats         (fitsfile*   fptr,
+                                     long long*  num_snapshots,
+                                     long long*  num_baselines,
+                                     int*        status);
 
-int    fip_output_create_diskfile(fitsfile**  fptr,
-                                  const char* filename,
-                                  long long   snap_count,
-                                  long long   unit_num,
-                                  int*        status);
+int     fip_output_validate_diskfile(fitsfile*   fptr,
+                                     const char* filename,
+                                     long long   snap_count,
+                                     long long   unit_num,
+                                     int*        status);
+
+int     fip_output_create_diskfile  (fitsfile**  fptr,
+                                     const char* filename,
+                                     long long   snap_count,
+                                     long long   unit_num,
+                                     int*        status);
+
+int     fip_output_open_diskfile    (fitsfile**  fptr,
+                                     const char* filename,
+                                     long long   snap_count,
+                                     long long   unit_num,
+                                     int*        status);
+
+int     fip_output_openat_diskfile  (fitsfile**  fptr,
+                                     int         dirfd,
+                                     const char* filename,
+                                     long long   snap_count,
+                                     long long   unit_num,
+                                     int*        status);
 
 
 /* End Extern "C" and Include Guard */

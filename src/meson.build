@@ -43,9 +43,12 @@ subdir('tools')
 fip = executable('fip',
     fip_tools_src,
     gnu_symbol_visibility: 'hidden',
+    include_directories:   [libfip_inc, include_directories('tools/')],
+    c_args:                ['-D_GNU_SOURCE'],
+    cpp_args:              ['-D_GNU_SOURCE'],
+    cuda_args:             ['-D_GNU_SOURCE'],
     dependencies:          [popt, cfitsio, casacore],
     link_with:             [libfip],
-    include_directories:   [libfip_inc, include_directories('tools/')],
     install:               true,
     override_options:      casacore_override,
 )

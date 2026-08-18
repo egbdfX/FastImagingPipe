@@ -559,6 +559,7 @@ int main_pipe(int argc, char* argv[]){
     char*     input_name      = NULL;
     fitsfile* output          = NULL;
     char*     output_name     = NULL;
+    int       output_fd       = -1;
     const char** leftovers    = NULL;
 
     fip_pipe_cuda_state* pipe = NULL;
@@ -944,26 +945,9 @@ int main_pipe(int argc, char* argv[]){
 
     unit_num            = image_size/unit_size;
     snap_count_file_out = snap_count_file-2;
-    switch(fip_output_open_diskfile(&output, output_name, READWRITE,
-                                    snap_count_file_out, unit_num,
-                                    &fits_status)){
-        case 0:
-            break;
-        case END_OF_FILE:
-        case UNKNOWN_REC:
-            if(fits_delete_file(output, &fits_status))
-                goto fitsfail;
-            /* FALLTHROUGH */
-        case FILE_NOT_OPENED:
-            fits_status = 0;
-            if(fip_output_create_diskfile(&output, output_name,
-                                          snap_count_file_out, unit_num,
-                                          &fits_status))
-                goto fitsfail;
-            break;
-        default:
-            goto fitsfail;
-    }
+    output_fd           = fip_output_open_diskfile(&output, output_name,
+                                                   snap_count_file_out, unit_num,
+                                                   &fits_status);
     if(fits_status)
         goto fitsfail;
 
@@ -981,11 +965,12 @@ int main_pipe(int argc, char* argv[]){
     /* Clean up and exit */
     cudafail:
     fitsfail:
-    if(fits_status){
+    if(fits_status)
         fits_report_error(stderr, fits_status);
-    }
     if(output)
         fits_close_file(output, &fits_status), output = NULL;
+    if(output_fd >= 0)
+        close(output_fd);
 
     finalexit:
     free(input_name);
