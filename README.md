@@ -5,23 +5,65 @@ We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection
 ## User guidance
 
 **Step 1:**
-Make sure GCCcore, CUDA, and CFITSIO are available. If you see a warning saying ```/usr/bin/ld.gold: warning: /apps/system/easybuild/software/GCCcore/11.2.0/lib/gcc/x86_64-pc-linux-gnu/11.2.0/crtbegin.o: unknown program property type 0xc0010002 in .note.gnu.property section```, you would need to make sure Python is also available.
+Make sure CUDA 12.6, CFITSIO, casacore, Python, uv, Meson, CMake, Ninja, and NVCC are available.
 
 **Step 2:**
-Run the Makefile by ```make```. Note that this Makefile is written for NVIDIA H100. If you are using other GPUs, you would need to make sure the CUDA arch is matching.
+Build the FIP command-line program with Meson.
+
+```
+uv run --with meson,cmake,ninja bash -c 'meson setup . build/Meson; meson compile -j1 -C build/Meson'
+```
+
+After building, the available commands can be checked by:
+
+```
+build/Meson/src/fip pipe --help
+```
+for pipeline running, and 
+```
+build/Meson/src/fip image --help
+```
+for image-only mode.
 
 **Step 3:**
-Run the code by executing the following command:
+Run the GPU FIP to produce the 3D tLISI FITS cube:
 
-```./sharedlibrary_gpu Visreal_input.fits Visimag_input.fits B_input.fits V_input.fits Image_Size Number_of_Baselines Frequency Cell_Size Number_of_Snapshots Tile_Size Output_Name.fits```.
+```
+build/Meson/src/fip pipe -vv -i /path/to/your/MeasurementSet.ms -o output.fits --cell-size {radians} --image-size {number of pixels}
+```
 
-Here, ```Visreal_input.fits```, ```Visimag_input.fits```, ```B_input.fits```, and ```V_input.fits``` are the input files (in FITS format) corresponding to the real components of visibilities, the imagery components of visibilities, the (centred) SVDed baseline matrix, and the V matrix in the SVD, respectively. The remaining arguments are as their names suggest, where ```Image_Size``` is an integer (e.g., if you input 100, it means the image size is $100 \times 100$ pixels), ```Number_of_Baselines``` is an integer, ```Frequency``` is in units of Hz, ```Cell_Size``` is in units of radians, ```Number_of_Snapshots``` is an integer, ```Tile_Size``` is an integer (e.g., if you input 20, it means the tile size is $20 \times 20$ pixels), and the last argument is the name of the output file which should end with '.fits'.
+This writes ```output.fits``` inside the ```FastImagingPipe``` directory.
 
 **Step 4:**
-The code will output a FITS file named ```Output_Name.fits``` (as user defined), which is the output tLISI matrix.
+Return to the outer run directory and build the CUDA harmonic trigger helper:
 
-## Test
-If you want to test the code, please download the files from 'ExampleInput'. Run the code by ```./sharedlibrary_gpu Visreal.fits Visimag.fits Bin.fits Vin.fits 4096 130816 140000000 0.0000072722 3 32 locations.fits```. You should obtain a FITS file named ```locations.fits```.
+```
+nvcc -O3 -std=c++11 -arch=sm_{yourGPU} -I$HOME/Libraries/cfitsio/include FastImagingPipe/refine/iqa_harfft_cuda.cu -L$HOME/Libraries/cfitsio/lib -lcfitsio -lcufft -lcudart -o iqa_harfft_cuda
+```
+**Step 5:**
+Run the end-to-end periodic/non-periodic (without/with the ```--non-periodic```) source localisation refinement:
+
+```
+uv run -p 3.12 --with='numpy,astropy' FastImagingPipe/refine/fip_tlisi_pipeline.py ./FastImagingPipe/output.fits --non-periodic --r-orientation auto --fip-bin ./FastImagingPipe/build/Meson/src/fip --max-orientation-shift 16 --result-fits z_result.fits --ms /path/to/your/MeasurementSet.ms --image-size {number of pixels} --cell-size {radians}
+```
+
+Here, ```./FastImagingPipe/output.fits``` is the 3D tLISI cube from Step 3, ```--ms``` is the Measurement Set used for snapshot imaging, ```--r-orientation auto``` compares the FIP image against the prototype image to choose the image orientation, and ```--result-fits``` names the 2D tLISI result map.
+
+**Step 6:**
+The pipeline writes the main output files without requiring any additional input uploads:
+
+```z_result.fits``` is the 2D z-score map.
+
+```difference_image.fits``` is the FITS difference image used for source localisation.
+
+```fip_image_t*.fits``` is the snapshot image produced by the compiled FIP imager in the outer run directory.
+
+```FastImagingPipe/refine/MS_{ImageSize}p_t*-*_natural.fits``` is the corresponding SKA SDP PFL prototype snapshot image produced by ```FIP_prototype_slice.py``` inside ```FastImagingPipe/refine```.
+
+The terminal output also prints the selected snapshots, the auto-selected orientation, and the localised source table.
+
+## Example
+See ```fipexample.sh``` for an example.
 
 ## Contact
 If you have any questions or need further assistance, please feel free to contact at [egbdfmusic1@gmail.com](mailto:egbdfmusic1@gmail.com).
