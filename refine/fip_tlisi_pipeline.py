@@ -9,11 +9,11 @@
 
 For 3D TLISI cubes this runs iqa_harfft_cuda, finds the most significant
 tile in the 2D harmonic-summed score matrix, uses that tile's TLISI time
-series on FITS axis 3 to choose one difference image, then localizes all
+series on FITS axis 3 to choose one difference image, then localises all
 detected boxes on that difference image.
 
 For 2D IQA/result matrices this skips CUDA, uses the 2D input directly as r,
-and requires --image-fits for source localization.
+and requires --image-fits for source localisation.
 """
 
 from __future__ import annotations
