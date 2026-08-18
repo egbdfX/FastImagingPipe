@@ -72,7 +72,7 @@ Options:
 
 Outputs:
 
-`PREFIXBin.fits` contains centred 2D baseline coordinates, shape `2 x total_samples`; `PREFIXVin.fits` includes per-snapshot 3 x 3 transformation matrices; `PREFIXVisreal.fits` contains weighted real visibility values; `PREFIXVisimag.fits` includes weighted imaginary visibility values; combined FITS file with extensions `TRANSFORMATION MATRICES`, `VISIBILITIES`, and `R-COORDINATES`
+`PREFIXBin.fits` contains centred 2D baseline coordinates, shape `2 x total_samples`; `PREFIXVin.fits` includes per-snapshot 3 x 3 transformation matrices; `PREFIXVisreal.fits` contains weighted real visibility values; `PREFIXVisimag.fits` includes weighted imaginary visibility values; combined FITS file with extensions `TRANSFORMATION MATRICES`, `VISIBILITIES`, and `R-COORDINATES`.
 
 If snapshots have different sample counts, the preprocessor zero-pads shorter snapshots to the maximum snapshot size before writing aggregate outputs.
 
