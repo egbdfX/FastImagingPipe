@@ -1179,10 +1179,13 @@ static void fip_pipe_cuda_stage_image_write(void* const p){
 int                  fip_pipe_cuda                           (fip_pipe_cuda_state*     pipe,
                                                               fip_pipe_cuda_input_cb   callback_input,
                                                               fip_pipe_cuda_output_cb  callback_output,
+                                                              fip_pipe_cuda_image_cb   callback_image,
                                                               void*                    userdata0,
                                                               void*                    userdata1,
                                                               const size_t             snap_start,
-                                                              const size_t             snap_end){
+                                                              const size_t             snap_end,
+                                                              const int                image_only){
+
     const float      conv_corr_norm_factor = 2.4937047051153827;
     const float      C                     = 1e-6;
     const float      inv_num_baselines     = 1.0f/pipe->param.num_baselines;
