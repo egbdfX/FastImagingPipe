@@ -1,6 +1,6 @@
 # Fast Imaging Pipeline
 
-We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FI pipeline consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)).
+We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FIP consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)).
 
 There are two executable stages:
 
@@ -12,10 +12,31 @@ The older Python preprocessing script, `SVD_MFS.py`, is still included as a
 reference implementation. The maintained preprocessing path is the GPU/C++
 implementation in `SVDPreprocessMain.cpp` and `SVDPreprocessKernels.cu`.
 
-## User guidance
+## Dependencies
 
+Build-time dependencies:
 
+- NVIDIA CUDA toolkit, including cuFFT, cuBLAS, and cuSOLVER
+- CFITSIO
+- casacore, for `svd_preprocess_gpu`
+- C++ compiler with C++11 support
+- GNU Make
 
+Optional Python dependencies for the legacy `SVD_MFS.py` script:
+
+- `casacore`
+- `scipy`
+- `numpy`
+- `scikit-learn`
+- `astropy`
+
+The Makefiles assume:
+
+- `CUDA_HOME=/usr/local/cuda` unless overridden
+- `CFITSIO_HOME=$(HOME)/Libraries/cfitsio`
+- `CASACORE_HOME=/usr` for `Makefile.gpu`
+
+Override these paths on the `make` command line if your installation differs.
 
 
 **Step 0:** Pre-processing
@@ -30,6 +51,8 @@ GPU version:
 make -f Makefile.gpu svd_preprocess_gpu
 ./svd_preprocess_gpu --group-by-time --snapshot-workers 16 --combined-output name_input.fits /path/to/ms
 ```
+
+## Build
 
 **Step 1:**
 Make sure GCCcore, CUDA, CASACORE, and CFITSIO are available. If you see a warning saying ```/usr/bin/ld.gold: warning: /apps/system/easybuild/software/GCCcore/11.2.0/lib/gcc/x86_64-pc-linux-gnu/11.2.0/crtbegin.o: unknown program property type 0xc0010002 in .note.gnu.property section```, you would need to make sure Python is also available.
