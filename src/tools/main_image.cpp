@@ -116,10 +116,10 @@ extern "C" int main_image(int argc, char* argv[]){
     unit_num = image_size / unit_size;
 
     {
-        char diskfile[4096];
-        snprintf(diskfile, sizeof(diskfile), "!%s", output_name);
+        char fitsfile_name[4096];
+        snprintf(fitsfile_name, sizeof(fitsfile_name), "!%s", output_name);
         long long axes[2] = {image_size, image_size};
-        fits_create_diskfile(&output, diskfile, &fits_status);
+        fits_create_file(&output, fitsfile_name, &fits_status);
         fits_create_imgll(output, FLOAT_IMG, 2, axes, &fits_status);
         if(fits_status) goto fitsfail;
     }
