@@ -52,7 +52,8 @@ int  fip_pipe_cuda_alloc(fip_pipe_cuda_state**    pipe_ptr,
                          const size_t             image_size,
                          const float              cell_size,
                          const size_t             unit_size,
-                         const size_t             unit_num);
+                         const size_t             unit_num,
+                         const int                big_endian);
 
 LIBFIP_PUBLIC
 int  fip_pipe_cuda      (fip_pipe_cuda_state*     pipe,

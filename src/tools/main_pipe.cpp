@@ -43,16 +43,43 @@ using namespace casacore;
 
 /* fip pipe implementation. */
 struct fip_pipe_iter_state{
-    fip_pipe_iter_state(Table input=Table(), fitsfile* output=NULL) :
+    fip_pipe_iter_state(Table       input        = Table(),
+                        fitsfile*   output       = NULL,
+                        int         output_fd    = -1) :
                         input(input),
                         input_iteration(0),
                         array_center(0),
                         output(output),
+                        output_fd(output_fd),
+                        output_base_offset(0),
                         output_status(0),
+                        output_snap_count(0),
+                        output_unit_num(0),
                         has_old_transform(0){
         memset(old_transform, 0, sizeof(old_transform[0][0])*3*3);
+
         if(!input.isNull())
             reset_iterator();
+
+        if(output){
+            LONGLONG off=0, end= 0;
+            LONGLONG axis[3] = {0, 0, 0};
+            int      naxis   = 0;
+            if(fits_movabs_hdu    (output,    1,       NULL, &output_status) ||
+               fits_get_img_dim   (output,     &naxis,       &output_status) ||
+               fits_get_img_sizell(output,    3, axis,       &output_status) ||
+               fits_get_hduaddrll (output, NULL, &off, &end, &output_status) ||
+               fits_flush_buffer  (output,    0,             &output_status)){
+                fits_report_error(stderr, output_status);
+                throw output_status;
+            }
+            output_unit_num    = axis[0];
+            output_snap_count  = axis[2];
+            output_base_offset = off;
+            if(output_fd)
+                posix_fadvise(output_fd, 0, end, POSIX_FADV_SEQUENTIAL);
+        }
+
     }
 
     fip_pipe_iter_state& reset_iterator(void){
@@ -486,8 +513,14 @@ struct fip_pipe_iter_state{
     TableIterator iter;
     Array<Double> chan_freq;
     double        array_center;
+
     fitsfile*     output;
+    int           output_fd;
+    size_t        output_base_offset;
     int           output_status;
+
+    long long     output_snap_count;
+    long long     output_unit_num;
 
     float         old_transform[3][3];
     int           has_old_transform;
@@ -528,6 +561,7 @@ static void output_cb(void*  userdata0,
                       void*  result,
                       size_t unit_num,
                       size_t iter){
+    ssize_t              ret;
     fip_pipe_iter_state* state = (fip_pipe_iter_state*)userdata0;
     (void)userdata1;
 
@@ -540,14 +574,15 @@ static void output_cb(void*  userdata0,
      * three snapshots are required to calculate a result image.
      */
 
-    long fres[3] = {1, 1,                           (long)iter+1-2};
-    long lres[3] = {(long)unit_num, (long)unit_num, (long)iter+1-2};
-
-    fits_write_subset(state->output, TFLOAT, fres, lres, result, &state->output_status);
-
-    if(state->output_status){
-        fits_report_error(stderr, state->output_status);
-        fflush(stderr);
+    ret = fip_pwrite_fully(state->output_fd,  result,  unit_num*unit_num*sizeof(float),
+                           state->output_base_offset + unit_num*unit_num*sizeof(float)*(iter-2));
+    if(ret<0 || (size_t)ret != unit_num*unit_num*sizeof(float)){
+        fprintf(stderr, "Error at snapshot %zu: pwrite() = %lld (%d = %s)\n",
+                        iter,
+                        (long long)ret,
+                        errno,
+                        strerror(errno));
+        fflush (stderr);
     }
 }
 
@@ -953,8 +988,8 @@ int main_pipe(int argc, char* argv[]){
 
 
     /* Execute Pipeline */
-    state = fip_pipe_iter_state(subset, output).skip(snap_start_final);
-    if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num))
+    state = fip_pipe_iter_state(subset, output, output_fd).skip(snap_start_final);
+    if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num, 1))
         goto cudafail;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
                              snap_start_final, snap_end_final);

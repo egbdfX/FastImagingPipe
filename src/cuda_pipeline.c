@@ -385,7 +385,8 @@ int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_stat
                                                               const size_t             image_size,
                                                               const float              cell_size,
                                                               const size_t             unit_size,
-                                                              const size_t             unit_num){
+                                                              const size_t             unit_num,
+                                                              const int                big_endian){
     fip_pipe_cuda_state* pipe;
 
     if(!pipe_ptr || !(*pipe_ptr = pipe = calloc(1, sizeof(*pipe))))
@@ -399,7 +400,7 @@ int                  fip_pipe_cuda_alloc                     (fip_pipe_cuda_stat
     pipe->param.cell_size     = cell_size;
     pipe->param.unit_size     = unit_size;
     pipe->param.unit_num      = unit_num;
-    pipe->param.big_endian    = 0;
+    pipe->param.big_endian    = big_endian;
 
     return 0;
 }
