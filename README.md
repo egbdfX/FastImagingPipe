@@ -54,7 +54,7 @@ The pipeline writes the main output files:
 
 ```z_result.fits``` is the 2D significance map.
 
-```difference_image.fits``` is the FITS difference image used for source localisation.
+```difference_image.fits``` is the difference image used for source localisation.
 
 ```fip_image_t*.fits``` is the image produced by TOI in the outer run directory.
 
