@@ -58,9 +58,9 @@ The pipeline writes the main output files:
 
 ```fip_image_t*.fits``` is the image produced by TOI in the outer run directory.
 
-```FastImagingPipe/refine/MS_{ImageSize}p_t*-*_natural.fits``` is the corresponding SKA-SDP image produced by ```FIP_prototype_slice.py``` inside ```FastImagingPipe/refine```.
+```FastImagingPipe/refine/MS_{ImageSize}p_t*-*_natural.fits``` is the SKA-SDP image produced by ```FIP_prototype_slice.py``` inside ```FastImagingPipe/refine```.
 
-The terminal output prints detected transient positions as a table.
+The terminal output prints detected transient information as a table.
 
 ## Example
 See ```fipexample.sh``` for an example.
