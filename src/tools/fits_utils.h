@@ -45,32 +45,6 @@ ssize_t fip_pwrite_fully            (int         fd,
 size_t  fip_compute_missing_records (size_t datastart);
 
 /**
- * @brief Open FIP input file.
- *
- * Identical interface to fits_open_diskfile() except executes additional
- * FIP-specific format checks.
- */
-
-int     fip_input_open_diskfile     (fitsfile**  fptr,
-                                     const char* filename,
-                                     int         iomode,
-                                     int*        status);
-
-/**
- * @brief Get statistics from FIP input file.
- * @param [in]   fptr               FITS file pointer.
- * @param [out]  num_snapshots      Number of snapshots.
- * @param [out]  num_baselines      Number of baselines.
- * @param [out]  status             FITS status code return.
- * @return 0 if successful, !0 otherwise.
- */
-
-int     fip_input_get_stats         (fitsfile*   fptr,
-                                     long long*  num_snapshots,
-                                     long long*  num_baselines,
-                                     int*        status);
-
-/**
  * @brief Validate FIP output file.
  *
  * Executes FIP output-format-specific validation checks.
