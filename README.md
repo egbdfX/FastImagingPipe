@@ -1,6 +1,6 @@
 # Fast Imaging Pipeline
 
-We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FIP consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)).
+We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection and localisation in radio astronomy. Please see our paper in Section [Reference](https://github.com/egbdfX/FastImagingPipe/tree/main#reference) for more information. The FIP consists of two components: Transient-Oriented Imager ([TOI](https://github.com/egbdfX/SVDimager)) and Fast Imaging Trigger ([FITrig](https://github.com/egbdfX/FastImagingTrigger)). The [SKA-SDP imager script](https://github.com/egbdfX/FastImagingPipe/blob/main/refine/FIP_prototype_slice.py) is adopted from [SKA SDP PFL](https://gitlab.com/ska-telescope/sdp/ska-sdp-exec-func-examples/-/blob/hip-315_fast_imaging_pipeline/pipelines/fast_imaging_pipeline/FIP_prototype_slice.py).
 
 ## User guidance
 
