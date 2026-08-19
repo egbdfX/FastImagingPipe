@@ -118,44 +118,35 @@ int fip_output_validate_diskfile(fitsfile*   fptr,
 }
 
 /**
- * @brief Write header to FIP output file.
+ * @brief Write FITS header to FIP output file.
  *
- * Similar interface to fits_create_diskfile().
- *
- * @param [out]  fptr         FITS file pointer.
- * @param [in]   filename     Path to file to open.
- * @param [out]  snap_count   Expected number of snapshots.
- * @param [out]  unit_num     Expected number of units per image.
- * @param [out]  status       FITS status code return.
- * @return 0 if successful, !0 otherwise.
+ * @param [in]  fd           File descriptor into which to write the header.
+ * @param [in]  snap_count   Expected number of snapshots.
+ * @param [in]  unit_num     Expected number of units per image.
+ * @return 184320 if successful, <184320 otherwise.
  */
 
-int fip_output_write_header(fitsfile**  fptr,
-                            const char* filename,
-                            long long   snap_count,
-                            long long   unit_num,
-                            int*        status){
-    long long  outaxis[3] = {unit_num, unit_num, snap_count};
-    long long  outdstart  = -1;
-    int        hdrlen     = 0;
-    int        hdrextra;
-
-
-    /* Primary HDU (index=1 in 1-based indexing) must be the output image array. */
-    FITS_CHECKED(fits_create_imgll   (*fptr, FLOAT_IMG, 3, outaxis,  status));
-    FITS_CHECKED(fits_get_hdrpos     (*fptr, &hdrlen,   NULL,        status));
-    hdrextra = 36*64 - hdrlen%(36*64) - 1;
-    FITS_CHECKED(fits_set_hdrsize    (*fptr, hdrextra,               status));
-    FITS_CHECKED(fits_get_hduaddrll  (*fptr, NULL, &outdstart, NULL, status));
-    FITS_ASSERT (!fip_compute_missing_records(outdstart), BAD_HEADER_FILL,
-        "HDU 1 (output image array) of file %s is missing %zu records of 2880 "
-        "bytes in its header; thus this file cannot be a properly "
-        "constructed FIP output file!\n",
-        filename, fip_compute_missing_records(outdstart));
-
-
-    /* Exit */
-    FITS_RETURN(0);
+ssize_t fip_output_write_header(int         fd,
+                                long long   snap_count,
+                                long long   unit_num){
+    char hdr[64*2880];
+    int  len = snprintf(hdr, sizeof(hdr),
+        "SIMPLE  =                    T / file does conform to FITS standard             "
+        "BITPIX  =                  -32 / number of bits per data pixel                  "
+        "NAXIS   =                    3 / number of data axes                            "
+        "NAXIS1  = %20llu / length of data axis 1                          "
+        "NAXIS2  = %20llu / length of data axis 2                          "
+        "NAXIS3  = %20llu / length of data axis 3                          "
+        "EXTEND  =                    T / FITS dataset may contain extensions            "
+        "COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy"
+        "COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H ",
+        unit_num   & 0xFFFFFFFFFFFFFFFFULL,
+        unit_num   & 0xFFFFFFFFFFFFFFFFULL,
+        snap_count & 0xFFFFFFFFFFFFFFFFULL
+    );
+    memset(hdr+len, ' ', sizeof(hdr)-len);
+    memcpy(hdr+sizeof(hdr)-80, "END", 3);
+    return fip_pwrite_fully(fd, hdr, sizeof(hdr), 0);
 }
 
 int fip_output_create_diskfile(fitsfile**  fptr,
@@ -163,8 +154,11 @@ int fip_output_create_diskfile(fitsfile**  fptr,
                                long long   snap_count,
                                long long   unit_num,
                                int*        status){
-    FITS_CHECKED(fits_create_diskfile(fptr, filename,                       status));
-    return fip_output_write_header   (fptr, filename, snap_count, unit_num, status);
+    int fd = fip_output_open_diskfile(fptr, filename, snap_count, unit_num, status);
+    int rc = errno;
+    close(fd);
+    errno = rc;
+    return *status;
 }
 
 int fip_output_open_diskfile  (fitsfile**  fptr,
@@ -190,12 +184,11 @@ int fip_output_openat_diskfile(fitsfile**  fptr,
     char p[65536];
 #endif
     char procpath[sizeof("/proc/self/fd/1098765432109876543210")];
-    char HDR[64*2880];
     const char* f;
     char* d;
-    int  fd=-1, internaldfd=-1, len, hdrlen, rc, mode=0644, safe=1;
+    int  fd=-1, internaldfd=-1, len, rc, mode=0644, safe=1;
     struct stat fd_stat;
-    LONGLONG outstart=sizeof(HDR), outdend=0;
+    LONGLONG outdstart, outdend=0;
 
 
     /* Fail with invalid output if error status already set. */
@@ -361,29 +354,14 @@ int fip_output_openat_diskfile(fitsfile**  fptr,
      * our own precise requirements exactly.
      */
 
-    snprintf(procpath, sizeof(procpath), "/proc/self/fd/%ld", (long)fd);
-    hdrlen = snprintf(HDR, sizeof(HDR),
-        "SIMPLE  =                    T / file does conform to FITS standard             "
-        "BITPIX  =                  -32 / number of bits per data pixel                  "
-        "NAXIS   =                    3 / number of data axes                            "
-        "NAXIS1  = %20lld / length of data axis 1                          "
-        "NAXIS2  = %20lld / length of data axis 2                          "
-        "NAXIS3  = %20lld / length of data axis 3                          "
-        "EXTEND  =                    T / FITS dataset may contain extensions            "
-        "COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy"
-        "COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H ",
-        unit_num,
-        unit_num,
-        snap_count
-    );
-    memset(HDR+hdrlen, ' ', sizeof(HDR)-hdrlen);
-    memcpy(HDR+sizeof(HDR)-80, "END", 3);
-    outdend  = sizeof(HDR) + sizeof(float)*unit_num*unit_num*snap_count;
-    outdend += outdend%2880 == 0 ? 0 : 2880-(outdend%2880);
-    if(fip_pwrite_fully(fd, HDR, sizeof(HDR), 0) < 0){
+    outdstart = (LONGLONG)fip_output_write_header(fd, snap_count, unit_num);
+    if(outdstart != 184320){
         rc = errno;
         goto fatal_fits_not_opened;
     }
+    outdend   = outdstart + sizeof(float)*unit_num*unit_num*snap_count;
+    outdend  += outdend%2880 == 0 ? 0 : 2880-(outdend%2880);
+    snprintf(procpath, sizeof(procpath), "/proc/self/fd/%ld", (long)fd);
 
 
     /**
@@ -410,7 +388,7 @@ int fip_output_openat_diskfile(fitsfile**  fptr,
 
     if((
 #ifdef _GNU_SOURCE
-        fallocate(fd, 0, outstart, outdend-outstart)
+        fallocate(fd, 0, outdstart, outdend-outdstart)
 #else
         ((errno = ENOSYS), -1)
 #endif
@@ -449,7 +427,7 @@ int fip_output_openat_diskfile(fitsfile**  fptr,
 
 #if _POSIX_C_SOURCE >= 200112L
                 /* If we're safely using O_TMPFILE, try posix_fallocate(). */
-                if(safe && posix_fallocate(fd, outstart, outdend-outstart) == 0)
+                if(safe && posix_fallocate(fd, outdstart, outdend-outdstart) == 0)
                     break;
 #endif
 

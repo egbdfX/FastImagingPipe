@@ -83,7 +83,7 @@ int     fip_output_create_diskfile  (fitsfile**  fptr,
                                      int*        status);
 
 /**
- * @brief Create FIP output file, with file descriptor.
+ * @brief Create FIP output file, returning file descriptor.
  *
  * Similar interface to fits_output_openat_diskfile(), except that it defaults
  * dirfd to the conventional default, AT_FDCWD (the current working directory).
@@ -103,9 +103,7 @@ int     fip_output_open_diskfile    (fitsfile**  fptr,
                                      int*        status);
 
 /**
- * @brief Create FIP output file, with file descriptor.
- *
- * Similar interface to fits_create_diskfile().
+ * @brief Create FIP output file, returning file descriptor.
  *
  * @param [out]  fptr         FITS file pointer.
  * @param [in]   dirfd        Directory file descriptor.
