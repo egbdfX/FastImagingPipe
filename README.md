@@ -8,7 +8,7 @@ We develop a GPU-accelerated Fast Imaging Pipeline (FIP) for transient detection
 Make sure CUDA 12.6, CFITSIO, casacore, Python, uv, Meson, CMake, Ninja, and NVCC are available.
 
 **Step 2:**
-Build the FIP command-line program with Meson.
+Build the FIP command-line program with Meson. See [here](https://github.com/egbdfX/FastImagingPipe/blob/engineering-archive/INSTALL.md) for more details.
 
 ```
 uv run --with meson,cmake,ninja bash -c 'meson setup . build/Meson; meson compile -j1 -C build/Meson'
