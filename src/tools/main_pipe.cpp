@@ -980,7 +980,7 @@ int main_pipe(int argc, char* argv[]){
 
     unit_num            = image_size/unit_size;
     snap_count_file_out = snap_count_file-2;
-    output_fd           = fip_output_open_diskfile(&output, output_name,
+    output_fd           = fip_output_diskfile_open(&output, output_name,
                                                    snap_count_file_out, unit_num,
                                                    &fits_status);
     if(fits_status)

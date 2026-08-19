@@ -96,7 +96,7 @@ int     fip_output_create_diskfile  (fitsfile**  fptr,
  * @return File descriptor >= 0 if successful, negative errno code otherwise.
  */
 
-int     fip_output_open_diskfile    (fitsfile**  fptr,
+int     fip_output_diskfile_open    (fitsfile**  fptr,
                                      const char* filename,
                                      long long   snap_count,
                                      long long   unit_num,
@@ -114,7 +114,7 @@ int     fip_output_open_diskfile    (fitsfile**  fptr,
  * @return File descriptor >= 0 if successful, negative errno code otherwise.
  */
 
-int     fip_output_openat_diskfile  (fitsfile**  fptr,
+int     fip_output_diskfile_openat  (fitsfile**  fptr,
                                      int         dirfd,
                                      const char* filename,
                                      long long   snap_count,

@@ -154,23 +154,23 @@ int fip_output_create_diskfile(fitsfile**  fptr,
                                long long   snap_count,
                                long long   unit_num,
                                int*        status){
-    int fd = fip_output_open_diskfile(fptr, filename, snap_count, unit_num, status);
+    int fd = fip_output_diskfile_open(fptr, filename, snap_count, unit_num, status);
     int rc = errno;
     close(fd);
     errno = rc;
     return *status;
 }
 
-int fip_output_open_diskfile  (fitsfile**  fptr,
+int fip_output_diskfile_open  (fitsfile**  fptr,
                                const char* filename,
                                long long   snap_count,
                                long long   unit_num,
                                int*        status){
-    return fip_output_openat_diskfile(fptr, AT_FDCWD, filename,
+    return fip_output_diskfile_openat(fptr, AT_FDCWD, filename,
                                       snap_count, unit_num, status);
 }
 
-int fip_output_openat_diskfile(fitsfile**  fptr,
+int fip_output_diskfile_openat(fitsfile**  fptr,
                                int         dirfd,
                                const char* filename,
                                long long   snap_count,
