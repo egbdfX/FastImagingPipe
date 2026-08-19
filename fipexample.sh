@@ -16,7 +16,7 @@ export LIBRARY_PATH="$LIBRARY_PATH:/network/scratch/b/bilaniuo/rootfs/usr/lib/x8
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}:/network/scratch/b/bilaniuo/rootfs/usr/lib/x86_64-linux-gnu/pkgconfig"
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/network/scratch/b/bilaniuo/rootfs/usr/lib/x86_64-linux-gnu"
 
-git clone -b engineering 'git@github.com:egbdfX/FastImagingPipe.git'
+git clone 'git@github.com:egbdfX/FastImagingPipe.git'
 cd FastImagingPipe
 
 if [[ ! -x build/Meson/src/fip || src/tools/main_pipe.cpp -nt build/Meson/src/fip || src/tools/main_image.cpp -nt build/Meson/src/fip || src/cuda_pipeline.c -nt build/Meson/src/fip || include/fip/cuda_pipeline.h -nt build/Meson/src/fip ]]; then
