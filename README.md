@@ -47,20 +47,20 @@ Run the end-to-end periodic/non-periodic (without/with the ```--non-periodic```)
 uv run -p 3.12 --with='numpy,astropy' FastImagingPipe/refine/fip_tlisi_pipeline.py ./FastImagingPipe/output.fits --non-periodic --r-orientation auto --fip-bin ./FastImagingPipe/build/Meson/src/fip --max-orientation-shift 16 --result-fits z_result.fits --ms /path/to/your/MeasurementSet.ms --image-size {number of pixels} --cell-size {radians}
 ```
 
-Here, ```./FastImagingPipe/output.fits``` is the 3D tLISI cube from Step 3, ```--ms``` is the Measurement Set used for snapshot imaging, ```--r-orientation auto``` compares the FIP image against the prototype image to choose the image orientation, and ```--result-fits``` names the 2D tLISI result map.
+Here, ```./FastImagingPipe/output.fits``` is the 3D tLISI cube from Step 3, ```--ms``` is the Measurement Set, ```--r-orientation auto``` compares the FIP image against the SKA-SDP image to choose the image orientation, and ```--result-fits``` names the 2D tLISI result map.
 
 **Step 6:**
-The pipeline writes the main output files without requiring any additional input uploads:
+The pipeline writes the main output files:
 
-```z_result.fits``` is the 2D z-score map.
+```z_result.fits``` is the 2D significance map.
 
 ```difference_image.fits``` is the FITS difference image used for source localisation.
 
-```fip_image_t*.fits``` is the snapshot image produced by the compiled FIP imager in the outer run directory.
+```fip_image_t*.fits``` is the image produced by TOI in the outer run directory.
 
-```FastImagingPipe/refine/MS_{ImageSize}p_t*-*_natural.fits``` is the corresponding SKA SDP PFL prototype snapshot image produced by ```FIP_prototype_slice.py``` inside ```FastImagingPipe/refine```.
+```FastImagingPipe/refine/MS_{ImageSize}p_t*-*_natural.fits``` is the corresponding SKA-SDP image produced by ```FIP_prototype_slice.py``` inside ```FastImagingPipe/refine```.
 
-The terminal output also prints the selected snapshots, the auto-selected orientation, and the localised source table.
+The terminal output prints detected transient positions as a table.
 
 ## Example
 See ```fipexample.sh``` for an example.
