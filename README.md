@@ -47,7 +47,7 @@ Run the end-to-end periodic/non-periodic (without/with the ```--non-periodic```)
 uv run -p 3.12 --with='numpy,astropy' FastImagingPipe/refine/fip_tlisi_pipeline.py ./FastImagingPipe/output.fits --non-periodic --r-orientation auto --fip-bin ./FastImagingPipe/build/Meson/src/fip --max-orientation-shift 16 --result-fits z_result.fits --ms /path/to/your/MeasurementSet.ms --image-size {number of pixels} --cell-size {radians}
 ```
 
-Here, ```./FastImagingPipe/output.fits``` is the 3D tLISI cube from Step 3, ```--ms``` is the Measurement Set, ```--r-orientation auto``` automatically compares the FIP image against the SKA-SDP image to choose the image orientation, and ```--result-fits``` names the 2D tLISI result map.
+Here, ```./FastImagingPipe/output.fits``` is the 3D tLISI cube from Step 3, ```--ms``` is the Measurement Set, ```--r-orientation auto``` automatically compares the FIP image against the SKA-SDP image to choose the image orientation, and ```--result-fits``` names the 2D significance map.
 
 **Step 6:**
 The pipeline writes the main output files:
