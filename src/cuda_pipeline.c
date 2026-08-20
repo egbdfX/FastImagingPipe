@@ -822,7 +822,7 @@ static cudaError_t   fip_pipe_cuda_plan_npp                  (fip_pipe_cuda_stat
 
 #if (NPP_VERSION_MAJOR  > 12) || \
     (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR  > 2) || \
-    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR == 2  && NPP_VERSION_PATCH >= 5) || \
+    (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR == 2  && NPP_VERSION_PATCH  > 5) || \
     (NPP_VERSION_MAJOR == 12  && NPP_VERSION_MINOR == 2  && NPP_VERSION_PATCH == 5  && NPP_VERSION_BUILD >= 2)
     size_t maxsz = 0;
 #else
