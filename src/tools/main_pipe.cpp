@@ -64,26 +64,17 @@ struct FIPPipelineState{
                      output_status     (ref.output_status),
                      iterator          (ref.iterator),
                      iteration_number  (ref.iteration_number),
+                     uvw_array         (ref.uvw_array),
+                     uvw               (ref.uvw),
+                     data_array        (ref.data_array),
+                     data              (ref.data),
+                     flag_array        (ref.flag_array),
+                     flag              (ref.flag),
+                     weight_array      (ref.weight_array),
+                     weight            (ref.weight),
                      has_old_transform (ref.has_old_transform){
         memcpy(old_transform, ref.old_transform, sizeof(old_transform));
         ref.reset();
-    }
-
-    ~FIPPipelineState(){
-        /* Clear FITS-related state */
-        if(output_status)
-            fits_report_error(stderr, output_status);
-        if(output)
-            fits_close_file(output,  &output_status);
-
-        output_status = FILE_NOT_OPENED;
-        output        = NULL;
-
-
-        /* Clear output FD */
-        if(output_fd >= 0)
-            close(output_fd);
-        output_fd = -1;
     }
 
     FIPPipelineState&& operator=(FIPPipelineState&& ref){
@@ -97,8 +88,17 @@ struct FIPPipelineState{
         output_base_offset  = ref.output_base_offset;
         output_status       = ref.output_status;
 
-        iteration_number    = ref.iteration_number;
         iterator            = ref.iterator;
+        iteration_number    = ref.iteration_number;
+
+        uvw_array           = ref.uvw_array;
+        uvw                 = ref.uvw;
+        data_array          = ref.data_array;
+        data                = ref.data;
+        flag_array          = ref.flag_array;
+        flag                = ref.flag;
+        weight_array        = ref.weight_array;
+        weight              = ref.weight;
 
         memcpy(old_transform, ref.old_transform, sizeof(old_transform));
         has_old_transform   = ref.has_old_transform;
@@ -123,7 +123,50 @@ struct FIPPipelineState{
         iterator           = TableIterator();
         iteration_number   = 0;
 
-        return resetTransform();
+        return resetBuffers().resetTransform();
+    }
+
+    ~FIPPipelineState(){
+        /* Clear FITS-related state */
+        if(output_status)
+            fits_report_error(stderr, output_status);
+        if(output)
+            fits_close_file(output,  &output_status);
+
+        output_status = FILE_NOT_OPENED;
+        output        = NULL;
+
+
+        /* Clear output FD */
+        if(output_fd >= 0)
+            close(output_fd);
+        output_fd = -1;
+
+
+        /* Free buffers */
+        freeBuffers();
+    }
+
+    FIPPipelineState&& freeBuffers(void){
+        return resetBuffers(true);
+    }
+
+    FIPPipelineState&& resetBuffers(bool deallocate=false){
+        uvw_array   .assign(Array<Double>());
+        data_array  .assign(Array<Complex>());
+        flag_array  .assign(Array<Bool>());
+        weight_array.assign(Array<Float>());
+        if(deallocate){
+            free(uvw);
+            free(data);
+            free(flag);
+            free(weight);
+        }
+        uvw          = NULL;
+        data         = NULL;
+        flag         = NULL;
+        weight       = NULL;
+        return std::move(*this);
     }
 
     FIPPipelineState&& resetTransform(void){
@@ -178,6 +221,41 @@ struct FIPPipelineState{
             throw std::invalid_argument("Input MeasurementSet has no baselines!");
         if(num_snapshots<3)
             throw std::invalid_argument("Input MeasurementSet has < 3 snapshots!");
+
+
+        /**
+         * Allocate aligned buffer memory.
+         *
+         * Preallocate double the required size, in case we will deal with merged
+         * polarities.
+         */
+
+        freeBuffers();
+        IPosition shape = {num_baselines*2};
+        void* p[4] = {NULL, NULL, NULL, NULL};
+        if(posix_memalign(&p[0], 128, 2*num_baselines*sizeof(*uvw))  ||
+           posix_memalign(&p[1], 128, 2*num_baselines*sizeof(*data)) ||
+           posix_memalign(&p[2], 128, 2*num_baselines*sizeof(*flag)) ||
+           posix_memalign(&p[3], 128, 2*num_baselines*sizeof(*weight))){
+            free(p[0]);
+            free(p[1]);
+            free(p[2]);
+            free(p[3]);
+            throw std::runtime_error("Out of memory!");
+        }
+
+        uvw          = (Double*) p[0];
+        data         = (Complex*)p[1];
+        flag         = (Bool*)   p[2];
+        weight       = (Float*)  p[3];
+        uvw_array   .assign(Array<Double> (shape, uvw,    StorageInitPolicy::SHARE));
+        data_array  .assign(Array<Complex>(shape, data,   StorageInitPolicy::SHARE));
+        flag_array  .assign(Array<Bool>   (shape, flag,   StorageInitPolicy::SHARE));
+        weight_array.assign(Array<Float>  (shape, weight, StorageInitPolicy::SHARE));
+        uvw_array   .set(0);
+        data_array  .set(0);
+        flag_array  .set(false);
+        weight_array.set(0);
 
 
         /* Iterator reset */
@@ -647,6 +725,15 @@ struct FIPPipelineState{
 
     TableIterator iterator;
     size_t        iteration_number    = 0;
+
+    Array<Double>  uvw_array;
+    Double*        uvw                 = NULL;
+    Array<Complex> data_array;
+    Complex*       data                = NULL;
+    Array<Bool>    flag_array;
+    Bool*          flag                = NULL;
+    Array<Float>   weight_array;
+    Float*         weight              = NULL;
 
     float         old_transform[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
     int           has_old_transform   = 0;
