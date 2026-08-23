@@ -42,73 +42,195 @@ using namespace casacore;
 
 
 /* fip pipe implementation. */
-struct fip_pipe_iter_state{
-    fip_pipe_iter_state(Table       input        = Table(),
-                        fitsfile*   output       = NULL,
-                        int         output_fd    = -1) :
-                        input(input),
-                        input_iteration(0),
-                        array_center(0),
-                        output(output),
-                        output_fd(output_fd),
-                        output_base_offset(0),
-                        output_status(0),
-                        output_snap_count(0),
-                        output_unit_num(0),
-                        has_old_transform(0){
-        memset(old_transform, 0, sizeof(old_transform[0][0])*3*3);
-
+struct FIPPipelineState{
+    FIPPipelineState(Table input=Table()){
         if(!input.isNull())
-            reset_iterator();
-
-        if(output){
-            LONGLONG off=0, end= 0;
-            LONGLONG axis[3] = {0, 0, 0};
-            int      naxis   = 0;
-            if(fits_movabs_hdu    (output,    1,       NULL, &output_status) ||
-               fits_get_img_dim   (output,     &naxis,       &output_status) ||
-               fits_get_img_sizell(output,    3, axis,       &output_status) ||
-               fits_get_hduaddrll (output, NULL, &off, &end, &output_status) ||
-               fits_flush_buffer  (output,    0,             &output_status)){
-                fits_report_error(stderr, output_status);
-                throw output_status;
-            }
-            output_unit_num    = axis[0];
-            output_snap_count  = axis[2];
-            output_base_offset = off;
-            if(output_fd)
-                posix_fadvise(output_fd, 0, end, POSIX_FADV_SEQUENTIAL);
-        }
-
+            setInput(std::move(input));
     }
 
-    fip_pipe_iter_state& reset_iterator(void){
-        iter = TableIterator(input, "TIME", TableIterator::Ascending,
-                                            TableIterator::QuickSort);
-        input_iteration = 0;
+    FIPPipelineState(const FIPPipelineState& ref) = delete;
+
+    FIPPipelineState(FIPPipelineState&& ref) :
+                     input             (ref.input),
+                     chan_freq_array   (ref.chan_freq_array),
+                     chan_freq         (ref.chan_freq),
+                     array_center      (ref.array_center),
+                     num_channels      (ref.num_channels),
+                     num_baselines     (ref.num_baselines),
+                     num_snapshots     (ref.num_snapshots),
+                     output            (ref.output),
+                     output_fd         (ref.output_fd),
+                     output_base_offset(ref.output_base_offset),
+                     output_status     (ref.output_status),
+                     iterator          (ref.iterator),
+                     iteration_number  (ref.iteration_number),
+                     has_old_transform (ref.has_old_transform){
+        memcpy(old_transform, ref.old_transform, sizeof(old_transform));
+        ref.reset();
+    }
+
+    ~FIPPipelineState(){
+        /* Clear FITS-related state */
+        if(output_status)
+            fits_report_error(stderr, output_status);
+        if(output)
+            fits_close_file(output,  &output_status);
+
+        output_status = FILE_NOT_OPENED;
+        output        = NULL;
+
+
+        /* Clear output FD */
+        if(output_fd >= 0)
+            close(output_fd);
+        output_fd = -1;
+    }
+
+    FIPPipelineState&& operator=(FIPPipelineState&& ref){
+        input               = ref.input;
+        chan_freq_array     = ref.chan_freq_array;
+        chan_freq           = ref.chan_freq;
+        array_center        = ref.array_center;
+
+        output              = ref.output;
+        output_fd           = ref.output_fd;
+        output_base_offset  = ref.output_base_offset;
+        output_status       = ref.output_status;
+
+        iteration_number    = ref.iteration_number;
+        iterator            = ref.iterator;
+
+        memcpy(old_transform, ref.old_transform, sizeof(old_transform));
+        has_old_transform   = ref.has_old_transform;
+        ref.reset();
+        return std::move(*this);
+    }
+
+    FIPPipelineState&& reset(void){
+        input              = Table();
+        chan_freq_array.assign(Array<Double>());
+        chan_freq          = NULL;
+        array_center       = 0;
+        num_channels       = 0;
+        num_baselines      = 0;
+        num_snapshots      = 0;
+
+        output             = NULL;
+        output_fd          = -1;
+        output_base_offset = 0;
+        output_status      = 0;
+
+        iterator           = TableIterator();
+        iteration_number   = 0;
+
+        return resetTransform();
+    }
+
+    FIPPipelineState&& resetTransform(void){
         has_old_transform = 0;
-        chan_freq       = ROArrayColumn<Double>(input.keywordSet()
-                                                     .asTable("SPECTRAL_WINDOW"),
-                                                "CHAN_FREQ").getColumn();
-
-        Table observation = input.keywordSet().asTable("OBSERVATION");
-        if(observation.nrow() > 0 &&
-           observation.tableDesc().isColumn("ARRAY_CENTER")){
-            ROArrayColumn<Double> array_center_col(observation, "ARRAY_CENTER");
-            Vector<Double> array_center_vec = array_center_col.get(0);
-            if(array_center_vec.size() > 0){
-                array_center = array_center_vec[0];
-            }
-        }
-        return *this;
+        memset(old_transform, 0, sizeof(old_transform));
+        return std::move(*this);
     }
 
-    fip_pipe_iter_state& skip(size_t num){
-        for(size_t i=0;i<num;i++){
-            input_iteration++;
-            iter.next();
+    /**
+     * @brief Set input MeasurementSet.
+     *
+     * @param [in]  input  The input MeasurementSet as a table.
+     * @return self.
+     */
+
+    FIPPipelineState&& setInput(Table input){
+        size_t  num_rows=0, num_rows_max=0;
+
+
+        /**
+         * Determine number of channels in the MeasurementSet and collect their
+         * center frequencies.
+         */
+
+        this->input = std::move(input);
+        Table spw(this->input.keywordSet().asTable("SPECTRAL_WINDOW"));
+        ROArrayColumn<Double> chan_freq_col(spw, "CHAN_FREQ");
+        chan_freq_col.getColumn(chan_freq_array, true);
+        chan_freq    = (double*)  chan_freq_array.data();
+        num_channels = (long long)chan_freq_array.size();
+
+
+        /**
+         * Determine number of snapshots and (maximum) number of baselines in
+         * MeasurementSet. Create iterator over table.
+         */
+
+        iterator = TableIterator(this->input, "TIME", TableIterator::Ascending,
+                                                      TableIterator::QuickSort);
+        for(num_snapshots=0;  !iterator.pastEnd(); iterator++){
+            num_rows = (size_t)iterator.table().nrow();
+            if(num_rows == 0)
+                continue;
+
+            num_snapshots++;
+            num_rows_max = num_rows_max > num_rows ?
+                           num_rows_max : num_rows;
         }
-        return *this;
+
+        num_baselines = num_rows_max * num_channels;
+        if(num_baselines<=0)
+            throw std::invalid_argument("Input MeasurementSet has no baselines!");
+        if(num_snapshots<3)
+            throw std::invalid_argument("Input MeasurementSet has < 3 snapshots!");
+
+
+        /* Iterator reset */
+        iterator.reset();
+        iteration_number = 0;
+        return resetTransform();
+    }
+
+    /**
+     * @brief Set output FITS file.
+     *
+     * @param [in]  output_name  The output FITS file's name.
+     * @param [in]  unit_num     The size of the output tLISI images in pixels on the side.
+     * @return self.
+     */
+
+    FIPPipelineState&& setOutput(const char* output_name, long long unit_num){
+        LONGLONG off=0, end=0;
+        LONGLONG axis[3] = {0, 0, 0};
+        int      naxis   = 0;
+
+
+        if(num_snapshots<3)
+            throw std::invalid_argument("Number of input snapshots < 3!");
+
+
+        output_fd = fip_output_diskfile_open(&output, output_name,
+                                             num_snapshots-2, unit_num,
+                                             &output_status);
+        if(fits_movabs_hdu    (output,    1,       NULL, &output_status) ||
+           fits_get_img_dim   (output,     &naxis,       &output_status) ||
+           fits_get_img_sizell(output,    3, axis,       &output_status) ||
+           fits_get_hduaddrll (output, NULL, &off, &end, &output_status) ||
+           fits_flush_buffer  (output,    0,             &output_status)){
+            fits_report_error(stderr, output_status);
+            throw output_status;
+        }
+        if(axis[0] != unit_num)
+            throw std::invalid_argument("Output file has unexpected unit_num!");
+        if(axis[2] != num_snapshots-2)
+            throw std::invalid_argument("Output file has unexpected num_snapshot!!");
+
+        posix_fadvise(output_fd, 0, end, POSIX_FADV_SEQUENTIAL);
+
+        return std::move(*this);
+    }
+
+    FIPPipelineState&& skip(size_t num=1){
+        for(size_t i=0;i<num;i++){
+            iterator.next();
+            iteration_number++;
+        }
+        return std::move(*this);
     }
 
     void next(void*    userdata,
@@ -125,7 +247,7 @@ struct fip_pipe_iter_state{
          * Get current snapshot. Obtain vital information about it.
          */
 
-        Table  snapshot = iter.table(); iter.next();
+        Table  snapshot = iterator.table(); iterator.next();
         size_t num_rows = (size_t)snapshot.nrow();
         const bool has_weight_spectrum = snapshot.tableDesc().isColumn("WEIGHT_SPECTRUM");
 
@@ -206,8 +328,8 @@ struct fip_pipe_iter_state{
         if( weight.steps()[0] != 1)
             throw std::runtime_error("Unexpected stride!");
 
-        Double*  ptr_uvw    = uvw .data();
-        Double*  ptr_freq   = chan_freq.data();
+        Double*  ptr_uvw    = uvw.data();
+        Double*  ptr_freq   = chan_freq;
 
 
         /* Visibilities */
@@ -508,22 +630,26 @@ struct fip_pipe_iter_state{
         }
     }
 
+
+    /* FIP pipeline state. */
     Table         input;
-    size_t        input_iteration;
-    TableIterator iter;
-    Array<Double> chan_freq;
-    double        array_center;
+    Array<Double> chan_freq_array;
+    Double*       chan_freq           = NULL;
+    double        array_center        = 0.0;
+    long long     num_channels        = 0;
+    long long     num_baselines       = 0;
+    long long     num_snapshots       = 0;
 
-    fitsfile*     output;
-    int           output_fd;
-    size_t        output_base_offset;
-    int           output_status;
+    fitsfile*     output              = NULL;
+    int           output_fd           = -1;
+    size_t        output_base_offset  = 184320;
+    int           output_status       = 0;
 
-    long long     output_snap_count;
-    long long     output_unit_num;
+    TableIterator iterator;
+    size_t        iteration_number    = 0;
 
-    float         old_transform[3][3];
-    int           has_old_transform;
+    float         old_transform[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
+    int           has_old_transform   = 0;
 };
 
 static char* fip_strdup(const char* s){
@@ -548,12 +674,12 @@ static void input_cb (void*  userdata0,
                       float  transform[3][3],
                       size_t num_baselines,
                       size_t iteration){
-    ((fip_pipe_iter_state*)userdata0)->next(userdata1,
-                                            (Complex*)visibilities,
-                                            coordinates,
-                                            transform,
-                                            num_baselines,
-                                            iteration);
+    ((FIPPipelineState*)userdata0)->next(userdata1,
+                                         (Complex*)visibilities,
+                                         coordinates,
+                                         transform,
+                                         num_baselines,
+                                         iteration);
 }
 
 static void output_cb(void*  userdata0,
@@ -562,7 +688,7 @@ static void output_cb(void*  userdata0,
                       size_t unit_num,
                       size_t iter){
     ssize_t              ret;
-    fip_pipe_iter_state* state = (fip_pipe_iter_state*)userdata0;
+    FIPPipelineState* state = (FIPPipelineState*)userdata0;
     (void)userdata1;
 
 
@@ -588,45 +714,30 @@ static void output_cb(void*  userdata0,
 
 
 int main_pipe(int argc, char* argv[]){
-    int       rc              = EXIT_FAILURE;
-    int       fits_status     = 0;
+    int       rc               = EXIT_FAILURE;
 
-    char*     input_name      = NULL;
-    fitsfile* output          = NULL;
-    char*     output_name     = NULL;
-    int       output_fd       = -1;
-    const char** leftovers    = NULL;
+    char*     input_name       = NULL;
+    char*     output_name      = NULL;
+    const char** leftovers     = NULL;
 
-    fip_pipe_cuda_state* pipe = NULL;
-    fip_pipe_iter_state  state;
+    fip_pipe_cuda_state* pipe  = NULL;
+    FIPPipelineState     state;
 
 
-    long long image_size      = 1024;
-    long long unit_size       = 32;
-    long long num_baselines   = NUM_BASELINES_FLAG_DEFAULT;
-    long long snap_start      = START_OFFSET_FLAG_DEFAULT;
-    long long snap_end        = END_OFFSET_FLAG_DEFAULT;
-    long long snap_count      = SNAP_COUNT_FLAG_DEFAULT;
-    int       num_dimensions  = 2;
-    float     cell_size       = 0.000020595;
-    long long snap_count_file    = 0;
-    long long num_baselines_file = 0;
-    long long snap_start_final   = 0;
-    long long snap_end_final     = 0;
-    long long snap_count_final   = 0;
-    int       verbose         = 0;
-    int       gpu_ordinal     = 0;
-    size_t    num_channels    = 0;
-    size_t    num_rows_max    = 0;
-    size_t    num_rows;
-    size_t    unit_num;
-    size_t    snap_count_file_out;
-    size_t    i;
-
-
-    Table                 input, spw, subset;
-    TableIterator         iter;
-    ROArrayColumn<double> chan_freq_col;
+    long long image_size       = 1024;
+    long long unit_size        = 32;
+    long long num_baselines    = NUM_BASELINES_FLAG_DEFAULT;
+    long long snap_start       = START_OFFSET_FLAG_DEFAULT;
+    long long snap_end         = END_OFFSET_FLAG_DEFAULT;
+    long long snap_count       = SNAP_COUNT_FLAG_DEFAULT;
+    int       num_dimensions   = 2;
+    float     cell_size        = 0.000020595;
+    long long snap_start_final = 0;
+    long long snap_end_final   = 0;
+    long long snap_count_final = 0;
+    int       verbose          = 0;
+    int       gpu_ordinal      = 0;
+    size_t    unit_num         = 0;
 
 
     /**
@@ -775,50 +886,21 @@ int main_pipe(int argc, char* argv[]){
 
 
     /**
-     * Open input file.
+     * Open input MeasurementSet.
      *
-     * Also collect the file's vital statistics, enabling its validation and
+     * Also collect the MS's vital statistics, enabling its validation and
      * that of the program's other arguments.
      */
 
     if(!Table::isReadable(input_name)){
         fprintf(stderr, "Error: %s is not readable!\n", input_name);
-        goto fitsfail;
+        goto finalexit;
     }
-    input  = Table(input_name, Table::Old);
-    spw    = input.keywordSet().asTable("SPECTRAL_WINDOW");
-    subset = input;
-    iter   = TableIterator(subset, "TIME", TableIterator::Ascending,
-                                           TableIterator::QuickSort);
-
-
-    chan_freq_col = ROArrayColumn<double>(spw, "CHAN_FREQ");
-    if(chan_freq_col.shapeColumn().empty())
-        for(i=0; i<chan_freq_col.nrow(); i++)
-            num_channels += chan_freq_col.shape(i).product();
-    else
-        num_channels = (size_t)chan_freq_col.shapeColumn().product();
-
-
-    for(snap_count_file=0; !iter.pastEnd(); iter++){
-        num_rows = (size_t)iter.table().nrow();
-        if(num_rows == 0)
-            continue;
-
-        snap_count_file++;
-        num_rows_max = num_rows_max > num_rows ?
-                       num_rows_max : num_rows;
-    }
-    num_baselines_file = num_rows_max * num_channels;
-
-
-    if(snap_count_file < 3){
-        fprintf(stderr, "Input file %s has %lld<3 snapshots!\n", input_name, snap_count_file);
-        goto fitsfail;
-    }
-    if(num_baselines_file <= 0){
-        fprintf(stderr, "Input file %s has no baselines!\n", input_name);
-        goto fitsfail;
+    try{
+        state.setInput(Table(input_name, Table::Old));
+    }catch(std::exception& exc){
+        fprintf(stderr, "%s\n", exc.what());
+        goto finalexit;
     }
 
 
@@ -836,63 +918,63 @@ int main_pipe(int argc, char* argv[]){
      */
 
     if      (num_baselines == NUM_BASELINES_FLAG_DEFAULT){
-             num_baselines  = num_baselines_file;
-    }else if(num_baselines  > num_baselines_file){
+             num_baselines  = state.num_baselines;
+    }else if(num_baselines  > state.num_baselines){
         fprintf(stderr, "Argument --num-baselines=%lld higher than file's contents %lld!\n",
-                num_baselines, num_baselines_file);
-        goto fitsfail;
+                num_baselines, state.num_baselines);
+        goto finalexit;
     }
 
     /* Finalize the explicit arguments. */
     if(snap_start != START_OFFSET_FLAG_DEFAULT){
         if(snap_start >= 0){
-            if(snap_start >= snap_count_file){
+            if(snap_start >= state.num_snapshots){
                 fprintf(stderr, "Argument --snap-start=%lld implies a start "
                                 "after the end of file %s!\n",
                         snap_start, input_name);
-                goto fitsfail;
+                goto finalexit;
             }
             snap_start_final = snap_start;
         }else{
-            if(snap_start < -snap_count_file){
+            if(snap_start < -state.num_snapshots){
                 fprintf(stderr, "Argument --snap-start=%lld implies a start "
                                 "before the beginning of file %s!\n",
                         snap_start, input_name);
-                goto fitsfail;
+                goto finalexit;
             }
-            snap_start_final = snap_count_file+snap_start;
+            snap_start_final = state.num_snapshots+snap_start;
         }
     }
     if(snap_end   != END_OFFSET_FLAG_DEFAULT){
         if(snap_end >= 0){
-            if(snap_end > snap_count_file){
+            if(snap_end > state.num_snapshots){
                 fprintf(stderr, "Argument --snap-end=%lld implies an end "
                                 "after the end of file %s!\n",
                         snap_end, input_name);
-                goto fitsfail;
+                goto finalexit;
             }
             snap_end_final = snap_end;
         }else{
-            if(snap_end <= -snap_count_file){
+            if(snap_end <= -state.num_snapshots){
                 fprintf(stderr, "Argument --snap-end=%lld implies an end "
                                 "at or before the beginning of file %s!\n",
                         snap_end, input_name);
-                goto fitsfail;
+                goto finalexit;
             }
-            snap_end_final = snap_count_file+snap_end;
+            snap_end_final = state.num_snapshots+snap_end;
         }
     }
     if(snap_count != SNAP_COUNT_FLAG_DEFAULT){
         if(snap_count < 3){
             fprintf(stderr, "Argument --snap-count=%lld is less than 3!\n",
                     snap_count);
-            goto fitsfail;
+            goto finalexit;
         }
-        if(snap_count > snap_count_file){
+        if(snap_count > state.num_snapshots){
             fprintf(stderr, "Argument --snap-count=%lld exceeds the number of "
                             "snapshots in file %s!\n",
                     snap_count, input_name);
-            goto fitsfail;
+            goto finalexit;
         }
         snap_count_final = snap_count;
     }
@@ -902,13 +984,13 @@ int main_pipe(int argc, char* argv[]){
              snap_end   == END_OFFSET_FLAG_DEFAULT   &&
              snap_count == SNAP_COUNT_FLAG_DEFAULT){
         snap_start_final = 0;
-        snap_end_final   = snap_count_file;
-        snap_count_final = snap_count_file;
+        snap_end_final   = state.num_snapshots;
+        snap_count_final = state.num_snapshots;
     }else if(snap_start != START_OFFSET_FLAG_DEFAULT &&
              snap_end   == END_OFFSET_FLAG_DEFAULT   &&
              snap_count == SNAP_COUNT_FLAG_DEFAULT){
-        snap_end_final   = snap_count_file;
-        snap_count_final = snap_count_file - snap_start_final;
+        snap_end_final   = state.num_snapshots;
+        snap_count_final = state.num_snapshots - snap_start_final;
     }else if(snap_start == START_OFFSET_FLAG_DEFAULT &&
              snap_end   != END_OFFSET_FLAG_DEFAULT   &&
              snap_count == SNAP_COUNT_FLAG_DEFAULT){
@@ -925,16 +1007,16 @@ int main_pipe(int argc, char* argv[]){
         if(snap_count_final > snap_end_final){
             fprintf(stderr, "Arguments --snap-count=%lld --snap-end=%lld imply a start "
                             "before the first snapshot!\n", snap_count, snap_end);
-            goto fitsfail;
+            goto finalexit;
         }
         snap_start_final = snap_end_final-snap_count_final;
     }else if(snap_start != START_OFFSET_FLAG_DEFAULT &&
              snap_end   == END_OFFSET_FLAG_DEFAULT   &&
              snap_count != SNAP_COUNT_FLAG_DEFAULT){
-        if(snap_start_final > snap_count_file-snap_count_final){
+        if(snap_start_final > state.num_snapshots-snap_count_final){
             fprintf(stderr, "Arguments --snap-start=%lld --snap-count=%lld imply an end "
                             "after the last snapshot!\n", snap_start, snap_count);
-            goto fitsfail;
+            goto finalexit;
         }
         snap_end_final = snap_start_final+snap_count_final;
     }else if(snap_start != START_OFFSET_FLAG_DEFAULT &&
@@ -943,26 +1025,26 @@ int main_pipe(int argc, char* argv[]){
         if(snap_start_final >= snap_end_final){
             fprintf(stderr, "Arguments --snap-start=%lld --snap-end=%lld imply zero or "
                             "negative number of snapshots!\n", snap_start, snap_end);
-            goto fitsfail;
+            goto finalexit;
         }
         snap_count_final = snap_end_final - snap_start_final;
     }else{
         if(snap_start_final >= snap_end_final){
             fprintf(stderr, "Arguments --snap-start=%lld --snap-end=%lld imply zero or "
                             "negative number of snapshots!\n", snap_start, snap_end);
-            goto fitsfail;
+            goto finalexit;
         }
         if(snap_count_final != snap_end_final-snap_start_final){
             fprintf(stderr, "Arguments --snap-start=%lld --snap-count=%lld --snap-end=%lld "
                             "are inconsistent!\n", snap_start, snap_count, snap_end);
-            goto fitsfail;
+            goto finalexit;
         }
     }
 
     /* Handle insanities of the finalized parameters not caught earlier */
     if(snap_count_final < 3){
         fprintf(stderr, "Implied --snap-count=%lld is less than 3!\n", snap_count_final);
-        goto fitsfail;
+        goto finalexit;
     }
 
 
@@ -975,38 +1057,35 @@ int main_pipe(int argc, char* argv[]){
      *   - END_OF_FILE:    If the file is completely empty (0 bytes)
      *   - UNKNOWN_REC:    If the file has an incomplete, invalid header written.
      *
-     * Assume that we want to rewrite the file in that case.
+     * However, this should be very, very rare.
      */
 
-    unit_num            = image_size/unit_size;
-    snap_count_file_out = snap_count_file-2;
-    output_fd           = fip_output_diskfile_open(&output, output_name,
-                                                   snap_count_file_out, unit_num,
-                                                   &fits_status);
-    if(fits_status)
-        goto fitsfail;
+    unit_num = image_size/unit_size;
+    try{
+        state.setOutput(output_name, unit_num);
+    }catch(std::exception& exc){
+        fprintf(stderr, "%s\n", exc.what());
+        goto finalexit;
+    }
 
 
-    /* Execute Pipeline */
-    state = fip_pipe_iter_state(subset, output, output_fd).skip(snap_start_final);
-    if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines, image_size, cell_size, unit_size, unit_num, 1))
-        goto cudafail;
+    /**
+     * Execute Pipeline.
+     *
+     * Advance/seek-forward the state to its designated start point, then allocate the
+     * pipeline and run it.
+     */
+
+    state.skip(snap_start_final);
+    if(fip_pipe_cuda_alloc(&pipe, verbose, gpu_ordinal, num_baselines,
+                           image_size, cell_size, unit_size, unit_num, 1))
+        goto finalexit;
     rc = fip_pipe_cuda(pipe, input_cb, output_cb, &state, NULL,
                              snap_start_final, snap_end_final);
     fip_pipe_cuda_clear(&pipe);
-    fits_flush_file(output, &fits_status);
 
 
     /* Clean up and exit */
-    cudafail:
-    fitsfail:
-    if(fits_status)
-        fits_report_error(stderr, fits_status);
-    if(output)
-        fits_close_file(output, &fits_status), output = NULL;
-    if(output_fd >= 0)
-        close(output_fd);
-
     finalexit:
     free(input_name);
     free(output_name);
