@@ -745,6 +745,22 @@ static cudaError_t   fip_pipe_cuda_await                     (fip_pipe_cuda_stat
     }
 }
 
+static cudaError_t   fip_pipe_cuda_sync                      (fip_pipe_cuda_state*     pipe,
+                                                              size_t                   iter,
+                                                              fip_pipe_cuda_event      code){
+    switch(code){
+        case PIPE_START:  return cudaEventSynchronize(pipe->events.pipestart);
+        case LOOP_START:  return cudaEventSynchronize(pipe->events.loopstart);
+        case PIPE_END:    return cudaEventSynchronize(pipe->events.pipeend);
+        case LOOP_END:    return cudaEventSynchronize(pipe->events.loopend);
+        case PIPE_1STOUT: return cudaEventSynchronize(pipe->events.pipe1stout);
+        default:
+            iter %= sizeof(pipe->events.iter) /
+                    sizeof(pipe->events.iter[0]);
+            return cudaEventSynchronize(pipe->events.iter[iter][code]);
+    }
+}
+
 static cudaError_t   fip_pipe_cuda_lock                      (fip_pipe_cuda_state*     pipe,
                                                               size_t                   iter,
                                                               fip_pipe_cuda_ring       ring,
@@ -1359,7 +1375,8 @@ int                  fip_pipe_cuda                           (fip_pipe_cuda_stat
         fip_pipe_cuda_await     (pipe, i, ITER_DATA_READ_PREP,   pipe->stream.data_read, 0);
         fip_pipe_cuda_lock      (pipe, i, RING_VIS_PIN,          pipe->stream.data_read, 0);
         fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ_READY,  pipe->stream.data_read, 0);
-        cudaLaunchHostFunc      (pipe->stream.data_read,         fip_pipe_cuda_stage_data_read, &pipe_state);
+        fip_pipe_cuda_sync      (pipe, i, ITER_DATA_READ_READY);
+        fip_pipe_cuda_stage_data_read(&pipe_state);
         fip_pipe_cuda_record    (pipe, i, ITER_DATA_READ_DONE,   pipe->stream.data_read, 0);
 
 
