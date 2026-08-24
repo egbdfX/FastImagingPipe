@@ -13,6 +13,7 @@
 #include <casacore/casa/Quanta/MVTime.h>
 #include <casacore/casa/Quanta/Unit.h>
 #include <casacore/tables/Tables/ArrayColumn.h>
+#include <casacore/tables/DataMan/DataManager.h>
 #include <casacore/tables/Tables/Table.h>
 #include <casacore/tables/Tables/TableIter.h>
 #include <casacore/tables/Tables/TableRecord.h>
@@ -162,10 +163,10 @@ struct FIPPipelineState{
             free(flag);
             free(weight);
         }
-        uvw          = NULL;
-        data         = NULL;
-        flag         = NULL;
-        weight       = NULL;
+        uvw    = NULL;
+        data   = NULL;
+        flag   = NULL;
+        weight = NULL;
         return std::move(*this);
     }
 
@@ -191,12 +192,15 @@ struct FIPPipelineState{
          * center frequencies.
          */
 
-        this->input = std::move(input);
+        this->input   = std::move(input);
         Table spw(this->input.keywordSet().asTable("SPECTRAL_WINDOW"));
         ROArrayColumn<Double> chan_freq_col(spw, "CHAN_FREQ");
         chan_freq_col.getColumn(chan_freq_array, true);
-        chan_freq    = (double*)  chan_freq_array.data();
-        num_channels = (long long)chan_freq_array.size();
+        chan_freq     = (double*)  chan_freq_array.data();
+        num_channels  = (long long)chan_freq_array.size();
+        chan_freq_sum = 0;
+        for(long long i=0;i<num_channels;i++)
+            chan_freq_sum += chan_freq[i];
 
 
         /**
@@ -226,35 +230,51 @@ struct FIPPipelineState{
         /**
          * Allocate aligned buffer memory.
          *
-         * Preallocate double the required size, in case we will deal with merged
-         * polarities.
+         * For data/flag/weight, preallocate double the required size, in case
+         * we will deal with merged polarities.
          */
 
         freeBuffers();
-        IPosition shape = {num_baselines*2};
+        IPosition uvw_shape   = {3, (long)num_rows_max};
+        IPosition other_shape = {2, (long)num_channels, (long)num_rows_max};
         void* p[4] = {NULL, NULL, NULL, NULL};
-        if(posix_memalign(&p[0], 128, 2*num_baselines*sizeof(*uvw))  ||
-           posix_memalign(&p[1], 128, 2*num_baselines*sizeof(*data)) ||
-           posix_memalign(&p[2], 128, 2*num_baselines*sizeof(*flag)) ||
-           posix_memalign(&p[3], 128, 2*num_baselines*sizeof(*weight))){
+        if(posix_memalign(&p[0], 128, 3*             num_rows_max*sizeof(*uvw))  ||
+           posix_memalign(&p[1], 128, 2*num_channels*num_rows_max*sizeof(*data)) ||
+           posix_memalign(&p[2], 128, 2*num_channels*num_rows_max*sizeof(*flag)) ||
+           posix_memalign(&p[3], 128, 2*num_channels*num_rows_max*sizeof(*weight))){
             free(p[0]);
             free(p[1]);
             free(p[2]);
             free(p[3]);
-            throw std::runtime_error("Out of memory!");
+            throw std::bad_alloc();
         }
 
-        uvw          = (Double*) p[0];
-        data         = (Complex*)p[1];
-        flag         = (Bool*)   p[2];
-        weight       = (Float*)  p[3];
-        uvw_array   .assign(Array<Double> (shape, uvw,    StorageInitPolicy::SHARE));
-        data_array  .assign(Array<Complex>(shape, data,   StorageInitPolicy::SHARE));
-        flag_array  .assign(Array<Bool>   (shape, flag,   StorageInitPolicy::SHARE));
-        weight_array.assign(Array<Float>  (shape, weight, StorageInitPolicy::SHARE));
+
+        /**
+         * Inexplicably,
+         *
+         *     Array(const IPosition &shape, T *storage, StorageInitPolicy::SHARE);
+         *
+         * does *not* work (_array.data()) does not return the same pointer that
+         * was shared), while _array.takeStorage() does. So create empty array
+         * and gift it its storage with .takeStorage().
+         */
+
+        uvw       = (Double*) p[0];
+        data      = (Complex*)p[1];
+        flag      = (Bool*)   p[2];
+        weight    = (Float*)  p[3];
+        uvw_array   .assign(Array<Double> ());
+        data_array  .assign(Array<Complex>());
+        flag_array  .assign(Array<Bool>   ());
+        weight_array.assign(Array<Float>  ());
+        uvw_array   .takeStorage(uvw_shape,   uvw,    StorageInitPolicy::SHARE);
+        data_array  .takeStorage(other_shape, data,   StorageInitPolicy::SHARE);
+        flag_array  .takeStorage(other_shape, flag,   StorageInitPolicy::SHARE);
+        weight_array.takeStorage(other_shape, weight, StorageInitPolicy::SHARE);
         uvw_array   .set(0);
         data_array  .set(0);
-        flag_array  .set(false);
+        flag_array  .set(true);
         weight_array.set(0);
 
 
@@ -326,7 +346,7 @@ struct FIPPipelineState{
          */
 
         Table  snapshot = iterator.table(); iterator.next();
-        size_t num_rows = (size_t)snapshot.nrow();
+        size_t num_rows = (size_t)snapshot.nrow(), i;
         const bool has_weight_spectrum = snapshot.tableDesc().isColumn("WEIGHT_SPECTRUM");
 
 
@@ -357,7 +377,8 @@ struct FIPPipelineState{
         size_t num_pols       = data_col.shape(0)[0];
         size_t num_channels   = data_col.shape(0)[1];
         bool   merge_two_pols = num_pols > 1;
-        if(num_baselines < num_rows*num_channels)
+
+        if((size_t)this->num_baselines < num_rows*num_channels)
             throw std::runtime_error("DATA has more baselines than expected!");
         if(num_pols != 1 && num_pols != 2 && num_pols != 4)
             throw std::runtime_error("DATA has unexpected number of "
@@ -370,16 +391,36 @@ struct FIPPipelineState{
          *
          * We use this slicer in the identically-shaped arrays "DATA" and "FLAG".
          */
+        
+        IPosition uvw_shape   = {3, (long)num_rows};
+        IPosition other_shape = {merge_two_pols?2:1, (long)num_channels, (long)num_rows};
+        Slice     pol_slice   = !merge_two_pols ? Slice(0) : Slice(0, 2, num_pols-1);
+        Slicer    pol_slicer{pol_slice, Slice()};
 
-        Slice  pol_slice = !merge_two_pols ? Slice(0) : Slice(0, 2, num_pols-1);
-        Slicer pol_slicer{pol_slice, Slice()};
-        Array<Double>  uvw  = uvw_col   .getColumn();
-        Array<Complex> data = data_col  .getColumn(pol_slicer);
-        Array<Bool>    flag = flag_col  .getColumn(pol_slicer);
-        Array<Float>   weight;
-        if(has_weight_spectrum){
-            weight          = weight_col.getColumn(pol_slicer);
-        }
+
+        /**
+         * To optimize data-loading, use data buffers we've pre-allocated already
+         * to maximum size and correct layout as the receivers of the loads.
+         *
+         * Reshape and slice into these arrays as necessary to make the reads
+         * legal, while forbidding reallocations.
+         */
+        
+        Array<Double>  uvw_batch   (this->uvw_array);
+        Array<Complex> data_batch  (this->data_array);
+        Array<Bool>    flag_batch  (this->flag_array);
+        Array<Float>   weight_batch(this->weight_array);
+
+        uvw_batch   .reformOrResize(uvw_shape,   0, false);
+        data_batch  .reformOrResize(other_shape, 0, false);
+        flag_batch  .reformOrResize(other_shape, 0, false);
+        weight_batch.reformOrResize(other_shape, 0, false);
+
+        uvw_col       .getColumn(Slicer(),   uvw_batch);
+        data_col      .getColumn(pol_slicer, data_batch);
+        flag_col      .getColumn(pol_slicer, flag_batch);
+        if(has_weight_spectrum)
+            weight_col.getColumn(pol_slicer, weight_batch);
 
 
         /**
@@ -389,73 +430,83 @@ struct FIPPipelineState{
          * Then, compute the coordinates.
          */
 
-        if(!uvw   .contiguousStorage())
+        if(!uvw_batch   .contiguousStorage())
             throw std::runtime_error("Storage unexpectedly not contiguous!");
-        if( uvw   .steps()[0] != 1)
+        if( uvw_batch   .steps()[0] != 1)
             throw std::runtime_error("Unexpected stride!");
-        if(!data  .contiguousStorage())
+        if(!data_batch  .contiguousStorage())
             throw std::runtime_error("Storage unexpectedly not contiguous!");
-        if( data  .steps()[0] != 1)
+        if( data_batch  .steps()[0] != 1)
             throw std::runtime_error("Unexpected stride!");
-        if(!flag  .contiguousStorage())
+        if(!flag_batch  .contiguousStorage())
             throw std::runtime_error("Storage unexpectedly not contiguous!");
-        if( flag  .steps()[0] != 1)
+        if( flag_batch  .steps()[0] != 1)
             throw std::runtime_error("Unexpected stride!");
-        if(!weight.contiguousStorage())
+        if(!weight_batch.contiguousStorage())
             throw std::runtime_error("Storage unexpectedly not contiguous!");
-        if( weight.steps()[0] != 1)
+        if( weight_batch.steps()[0] != 1)
             throw std::runtime_error("Unexpected stride!");
-
-        Double*  ptr_uvw    = uvw.data();
-        Double*  ptr_freq   = chan_freq;
 
 
         /* Visibilities */
-        for(size_t i=0;i<num_rows;i++){
-            Array<Complex> data_row = data[i];
-            Array<Bool>    flag_row = flag[i];
-            Array<Float>   weight_row;
-            if(has_weight_spectrum)
-                weight_row = weight[i];
+        Complex* data_ptr   = data;
+        Bool*    flag_ptr   = flag;
+        Float*   weight_ptr = weight;
+        if(merge_two_pols){
+            if(has_weight_spectrum){
+                for(i=0;i<num_rows*num_channels;i++){
+                    Complex vis0    = *data_ptr++;
+                    Complex vis3    = *data_ptr++;
+                    Bool    flag0   = *flag_ptr++;
+                    Bool    flag3   = *flag_ptr++;
+                    Float   weight0 = *weight_ptr++;
+                    Float   weight3 = *weight_ptr++;
 
-            for(size_t j=0;j<num_channels;j++){
-                const IPosition pol0_index{0, (long)j};
-                const IPosition pol3_index{1, (long)j};
-                Complex vis0    = data_row(pol0_index);
-                Complex vis3    = merge_two_pols ? data_row(pol3_index) : 0;
-                Bool    flag0   = flag_row(pol0_index);
-                Bool    flag3   = merge_two_pols ? flag_row(pol3_index) : 1;
-                Float   weight0 = has_weight_spectrum                   ? weight_row(pol0_index) : 1.0f;
-                Float   weight3 = merge_two_pols ? (has_weight_spectrum ? weight_row(pol3_index) : 1.0f) : 0.0f;
+                    Float   w0      = flag0 ? 0.0f : weight0;
+                    Float   w3      = flag3 ? 0.0f : weight3;
+                    Float   w_sum   = w0+w3;
+                    visibilities[i] = w_sum > 0.0f ? (vis0*w0 + vis3*w3)/w_sum : 0;
+                }
+            }else{
+                for(i=0;i<num_rows*num_channels;i++){
+                    Complex vis0    = *data_ptr++;
+                    Complex vis3    = *data_ptr++;
+                    Bool    flag0   = *flag_ptr++;
+                    Bool    flag3   = *flag_ptr++;
 
-                Float   w0      = flag0 ? 0.0f : weight0;
-                Float   w3      = flag3 ? 0.0f : weight3;
-                Float   w_sum   = w0+w3;
-                if(w_sum > 0.0f){
-                    visibilities[num_channels*i+j] = (vis0*w0 + vis3*w3)/w_sum;
-                }else{
-                    visibilities[num_channels*i+j] = 0;
+                    Float   w0      = !flag0;
+                    Float   w3      = !flag3;
+                    Float   w_sum   = w0+w3;
+                    visibilities[i] = w_sum > 0.0f ? (vis0*w0 + vis3*w3)/w_sum : 0;
+                }
+            }
+        }else{
+            if(has_weight_spectrum){
+                for(i=0;i<num_rows*num_channels;i++){
+                    Complex vis0    = *data_ptr++;
+                    Bool    flag0   = *flag_ptr++;
+                    Float   weight0 = *weight_ptr++;
+
+                    Float   w0      = flag0 ? 0.0f : weight0;
+                    visibilities[i] = w0 > 0.0f ? vis0 : 0;
+                }
+            }else{
+                for(i=0;i<num_rows*num_channels;i++){
+                    Complex vis0    = *data_ptr++;
+                    Bool    flag0   = *flag_ptr++;
+                    visibilities[i] = !flag0 ? vis0 : 0;
                 }
             }
         }
+        memset((void*)&visibilities[i], 0, (num_baselines-i)*sizeof(*visibilities));
 
 
         /* Coordinates, Part I: Mean. */
-        Double x0avg=0, x1avg=0, x2avg=0, x0, x1, x2, u, v, w;
+        Double x0avg=0, x1avg=0, x2avg=0, x0, x1, x2, u, v, w, r0, r1;
         for(size_t i=0;i<num_rows;i++){
-            u = ptr_uvw[3*i+0];
-            v = ptr_uvw[3*i+1];
-            w = ptr_uvw[3*i+2];
-
-            for(size_t j=0;j<num_channels;j++){
-                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-
-                x0avg += x0;
-                x1avg += x1;
-                x2avg += x2;
-            }
+            x0avg += uvw[3*i+0] * (chan_freq_sum / K_SPEED_OF_LIGHT); /* u */
+            x1avg += uvw[3*i+1] * (chan_freq_sum / K_SPEED_OF_LIGHT); /* v */
+            x2avg += uvw[3*i+2] * (chan_freq_sum / K_SPEED_OF_LIGHT); /* w */
         }
         x0avg /= num_baselines;
         x1avg /= num_baselines;
@@ -465,14 +516,14 @@ struct FIPPipelineState{
         /* Coordinates, Part II: Covariance. */
         Double covariance[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
         for(size_t i=0;i<num_rows;i++){
-            u = ptr_uvw[3*i+0];
-            v = ptr_uvw[3*i+1];
-            w = ptr_uvw[3*i+2];
+            u = uvw[3*i+0];
+            v = uvw[3*i+1];
+            w = uvw[3*i+2];
 
             for(size_t j=0;j<num_channels;j++){
-                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
-                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
-                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
+                x0 = u * (chan_freq[j] / K_SPEED_OF_LIGHT) - x0avg;
+                x1 = v * (chan_freq[j] / K_SPEED_OF_LIGHT) - x1avg;
+                x2 = w * (chan_freq[j] / K_SPEED_OF_LIGHT) - x2avg;
 
                 covariance[0][0] += x0*x0;
                 covariance[0][1] += x0*x1;
@@ -575,23 +626,24 @@ struct FIPPipelineState{
 
         /* Coordinates, Part V: Project. */
         for(size_t i=0;i<num_rows;i++){
-            u = ptr_uvw[3*i+0];
-            v = ptr_uvw[3*i+1];
-            w = ptr_uvw[3*i+2];
+            x0 = uvw[3*i+0] / K_SPEED_OF_LIGHT;
+            x1 = uvw[3*i+1] / K_SPEED_OF_LIGHT;
+            x2 = uvw[3*i+2] / K_SPEED_OF_LIGHT;
+
+            r0 = transform[0][0]*x0 +
+                 transform[0][1]*x1 +
+                 transform[0][2]*x2;
+            r1 = transform[1][0]*x0 +
+                 transform[1][1]*x1 +
+                 transform[1][2]*x2;
 
             for(size_t j=0;j<num_channels;j++){
-                x0 = u * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-                x1 = v * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-                x2 = w * (ptr_freq[j] / K_SPEED_OF_LIGHT);
-
-                coordinates[2*(num_channels*i+j) + 0] = transform[0][0]*x0 +
-                                                        transform[0][1]*x1 +
-                                                        transform[0][2]*x2;
-                coordinates[2*(num_channels*i+j) + 1] = transform[1][0]*x0 +
-                                                        transform[1][1]*x1 +
-                                                        transform[1][2]*x2;
+                coordinates[2*(num_channels*i+j) + 0] = r0*chan_freq[j];
+                coordinates[2*(num_channels*i+j) + 1] = r1*chan_freq[j];
             }
         }
+        i = num_rows*num_channels;
+        memset((void*)&coordinates[i], 0, 2*(num_baselines-i)*sizeof(*coordinates));
     }
 
     static void jacobi_eigen_3x3(float* matrix, float* eigenvalues, float* eigenvectors){
@@ -713,7 +765,8 @@ struct FIPPipelineState{
     Table         input;
     Array<Double> chan_freq_array;
     Double*       chan_freq           = NULL;
-    double        array_center        = 0.0;
+    Double        chan_freq_sum       = 0;
+    double        array_center        = 0;
     long long     num_channels        = 0;
     long long     num_baselines       = 0;
     long long     num_snapshots       = 0;
@@ -727,13 +780,13 @@ struct FIPPipelineState{
     size_t        iteration_number    = 0;
 
     Array<Double>  uvw_array;
-    Double*        uvw                 = NULL;
+    Double*        uvw                = NULL;
     Array<Complex> data_array;
-    Complex*       data                = NULL;
+    Complex*       data               = NULL;
     Array<Bool>    flag_array;
-    Bool*          flag                = NULL;
+    Bool*          flag               = NULL;
     Array<Float>   weight_array;
-    Float*         weight              = NULL;
+    Float*         weight             = NULL;
 
     float         old_transform[3][3] = {{0,0,0}, {0,0,0}, {0,0,0}};
     int           has_old_transform   = 0;
