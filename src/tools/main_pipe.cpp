@@ -236,12 +236,12 @@ struct FIPPipelineState{
 
         freeBuffers();
         IPosition uvw_shape   = {3, (long)num_rows_max};
-        IPosition other_shape = {2, (long)num_channels, (long)num_rows_max};
+        IPosition other_shape = {4, (long)num_channels, (long)num_rows_max};
         void* p[4] = {NULL, NULL, NULL, NULL};
         if(posix_memalign(&p[0], 128, 3*             num_rows_max*sizeof(*uvw))  ||
-           posix_memalign(&p[1], 128, 2*num_channels*num_rows_max*sizeof(*data)) ||
-           posix_memalign(&p[2], 128, 2*num_channels*num_rows_max*sizeof(*flag)) ||
-           posix_memalign(&p[3], 128, 2*num_channels*num_rows_max*sizeof(*weight))){
+           posix_memalign(&p[1], 128, 4*num_channels*num_rows_max*sizeof(*data)) ||
+           posix_memalign(&p[2], 128, 4*num_channels*num_rows_max*sizeof(*flag)) ||
+           posix_memalign(&p[3], 128, 4*num_channels*num_rows_max*sizeof(*weight))){
             free(p[0]);
             free(p[1]);
             free(p[2]);
@@ -386,26 +386,19 @@ struct FIPPipelineState{
 
 
         /**
-         * To optimize data-loading, use a Slicer object designed to select the
-         * one or two polarizations only we want: Either {0}, {0,1} or {0,3}.
-         *
-         * We use this slicer in the identically-shaped arrays "DATA" and "FLAG".
-         */
-        
-        IPosition uvw_shape   = {3, (long)num_rows};
-        IPosition other_shape = {merge_two_pols?2:1, (long)num_channels, (long)num_rows};
-        Slice     pol_slice   = !merge_two_pols ? Slice(0) : Slice(0, 2, num_pols-1);
-        Slicer    pol_slicer{pol_slice, Slice()};
-
-
-        /**
          * To optimize data-loading, use data buffers we've pre-allocated already
          * to maximum size and correct layout as the receivers of the loads.
          *
-         * Reshape and slice into these arrays as necessary to make the reads
-         * legal, while forbidding reallocations.
+         * Reshape these arrays as necessary to make the reads legal, while
+         * forbidding reallocations.
+         *
+         * We do not use Slicers to slice out only the polarities we need.
+         * This turned out not to be profitable.
          */
-        
+
+        IPosition      uvw_shape   = {3, (long)num_rows};
+        IPosition      other_shape = {(long)num_pols, (long)num_channels, (long)num_rows};
+
         Array<Double>  uvw_batch   (this->uvw_array);
         Array<Complex> data_batch  (this->data_array);
         Array<Bool>    flag_batch  (this->flag_array);
@@ -416,11 +409,11 @@ struct FIPPipelineState{
         flag_batch  .reformOrResize(other_shape, 0, false);
         weight_batch.reformOrResize(other_shape, 0, false);
 
-        uvw_col       .getColumn(Slicer(),   uvw_batch);
-        data_col      .getColumn(pol_slicer, data_batch);
-        flag_col      .getColumn(pol_slicer, flag_batch);
+        uvw_col       .getColumn(uvw_batch);
+        data_col      .getColumn(data_batch);
+        flag_col      .getColumn(flag_batch);
         if(has_weight_spectrum)
-            weight_col.getColumn(pol_slicer, weight_batch);
+            weight_col.getColumn(weight_batch);
 
 
         /**
@@ -455,12 +448,12 @@ struct FIPPipelineState{
         if(merge_two_pols){
             if(has_weight_spectrum){
                 for(i=0;i<num_rows*num_channels;i++){
-                    Complex vis0    = *data_ptr++;
-                    Complex vis3    = *data_ptr++;
-                    Bool    flag0   = *flag_ptr++;
-                    Bool    flag3   = *flag_ptr++;
-                    Float   weight0 = *weight_ptr++;
-                    Float   weight3 = *weight_ptr++;
+                    Complex vis0    = data_ptr  [0];
+                    Complex vis3    = data_ptr  [num_pols-1]; data_ptr   += num_pols;
+                    Bool    flag0   = flag_ptr  [0];
+                    Bool    flag3   = flag_ptr  [num_pols-1]; flag_ptr   += num_pols;
+                    Float   weight0 = weight_ptr[0];
+                    Float   weight3 = weight_ptr[num_pols-1]; weight_ptr += num_pols;
 
                     Float   w0      = flag0 ? 0.0f : weight0;
                     Float   w3      = flag3 ? 0.0f : weight3;
@@ -469,10 +462,10 @@ struct FIPPipelineState{
                 }
             }else{
                 for(i=0;i<num_rows*num_channels;i++){
-                    Complex vis0    = *data_ptr++;
-                    Complex vis3    = *data_ptr++;
-                    Bool    flag0   = *flag_ptr++;
-                    Bool    flag3   = *flag_ptr++;
+                    Complex vis0    = data_ptr  [0];
+                    Complex vis3    = data_ptr  [num_pols-1]; data_ptr   += num_pols;
+                    Bool    flag0   = flag_ptr  [0];
+                    Bool    flag3   = flag_ptr  [num_pols-1]; flag_ptr   += num_pols;
 
                     Float   w0      = !flag0;
                     Float   w3      = !flag3;
